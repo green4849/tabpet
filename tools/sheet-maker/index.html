@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>TabPet sheet maker</title>
+<style>
+  :root { --bg:#f6f3ee; --ink:#2b2622; --muted:#8a8178; --line:#e4ddd3; --card:#fff; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  code { background:#fff; border:1px solid var(--line); border-radius:4px; padding:0 4px; }
+  .rows { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+  .row { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; text-align:center; }
+  .row canvas { display:block; margin:0 auto; }
+  .row b { display:block; margin-top:6px; }
+  .row span { color:var(--muted); font-size:12px; }
+  #status { color:var(--muted); margin-top:16px; font-size:12px; }
+  #sheet { max-width:100%; margin-top:16px; border:1px dashed var(--line); background:repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0/16px 16px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+<main>
+  <h1>TabPet sheet maker</h1>
+  <p class="sub">3D 모델(.glb)을 고정 카메라로 찍어 TabPet용 그림 시트를 만듭니다. 주소 뒤에
+  <code>?model=../example-character/sprout.glb&amp;name=sprout&amp;label=새싹이</code>처럼 붙이세요.
+  <code>turn=180</code>(뒤를 보고 있을 때 돌리는 각도), <code>bright=1.5</code>(어두울 때 밝히기), <code>save=0</code>(저장 안 함)도 쓸 수 있습니다.
+  열면 <code>tools/sheet-maker/out/&lt;name&gt;-sheet.png/.json</code>으로 저장됩니다. 아래 칸은 실제 화면 크기(75%)입니다.</p>
+  <div class="rows" id="rows"></div>
+  <img id="sheet" alt="sprite sheet">
+  <div id="status">렌더링 중…</div>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const q = new URLSearchParams(location.search);
+const MODEL = q.get('model') || '../example-character/sprout.glb';
+const NAME = /^[a-z0-9-]+$/.test(q.get('name') || '') ? q.get('name') : 'character';
+const LABEL = q.get('label') || '';
+const TURN = (parseFloat(q.get('turn')) || 0) * Math.PI / 180;
+const BRIGHT = parseFloat(q.get('bright')) || 1;
+const SAVE = q.get('save') !== '0';
+document.title = `${NAME} · TabPet sheet maker`;
+
+const CW = 128, CH = 138, COLS = 8, SS = 2;          // cell size (px), columns, supersampling
+const BASE = 10, HEIGHT = 84;                         // floor line, character height (px)
+const TAU = Math.PI * 2;
+
+// The rows TabPet uses, in this order: name, frames, frames per second, and a pose per frame.
+// A pose moves the whole model: bob (px up), tilt (lean, rad), spin (turn, rad), sx/sy (squash).
+// Characters built from separate parts can be posed further; see README "캐릭터 직접 만들기".
+const ROWS = [
+  { key:'idle',  label:'쉬기',   n:6, fps:6,  f:(i,n)=>{ const s=Math.sin(TAU*i/n); return { sy:1+0.03*s, sx:1-0.015*s }; } },
+  { key:'walk',  label:'걷기',   n:8, fps:10, f:(i,n)=>{ const s=Math.sin(TAU*i/n), a=Math.abs(s); return { spin:0.55, bob:a*7, tilt:s*0.12, sy:1-0.05*(1-a), sx:1+0.03*(1-a) }; } },
+  { key:'sleep', label:'졸기',   n:6, fps:3,  f:(i,n)=>{ const s=Math.sin(TAU*i/n); return { sy:0.86+0.02*s, sx:1.07, tilt:0.1, fx:'zzz' }; } },
+  { key:'dance', label:'춤',     n:8, fps:8,  f:(i,n)=>{
+      if (i < 4) { const s=Math.sin(TAU*i/4); return { tilt:s*0.22, spin:s*0.45, bob:Math.abs(Math.cos(TAU*i/4))*8, fx:'notes' }; }
+      return { spin:(i-3)*TAU/5, bob:6, sy:1.03, fx:'notes' }; } },
+  { key:'fall',  label:'떨어지기', n:4, fps:10, f:(i)=>[{ bob:30, sy:1.12, sx:0.92 }, { bob:12, sy:1.08, sx:0.95 }, { sy:0.8, sx:1.15 }, {}][i] },
+];
+
+const status = document.getElementById('status');
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, preserveDrawingBuffer:true });
+renderer.setPixelRatio(1); renderer.setSize(CW*SS, CH*SS); renderer.setClearColor(0x000000, 0);
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0xd9c7b0, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-60, 160, 200); scene.add(sun);
+const camera = new THREE.OrthographicCamera(-CW/2, CW/2, CH, 0, -1000, 1000);
+camera.position.set(0, 0, 500); camera.lookAt(0, 0, 0);
+const world = new THREE.Group(); world.rotation.x = 0.12; scene.add(world);
+const pivot = new THREE.Group(); world.add(pivot);
+const spin = new THREE.Group(); pivot.add(spin);
+
+let model;
+try { model = (await new GLTFLoader().loadAsync(MODEL)).scene; }
+catch (e) { status.textContent = `모델을 읽지 못했습니다: ${MODEL} (${e.message || e})`; throw e; }
+model.rotation.y = TURN;
+if (BRIGHT !== 1) model.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.color && m.color.multiplyScalar(BRIGHT)); });
+let box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
+model.scale.setScalar(Math.min(HEIGHT/size.y, 100/Math.max(size.x, size.z)));
+box = new THREE.Box3().setFromObject(model);
+const c = box.getCenter(new THREE.Vector3());
+model.position.set(-c.x, -box.min.y, -c.z);
+spin.add(model);
+const realH = box.getSize(new THREE.Vector3()).y;
+
+function pose(p) {
+  pivot.position.set(p.shift||0, BASE + (p.bob||0), 0);
+  pivot.rotation.z = p.tilt||0;
+  pivot.scale.set(p.sx||1, p.sy||1, p.sx||1);
+  spin.rotation.y = p.spin||0;
+}
+function drawFx(ctx, p, i) {
+  const headY = CH - (BASE + realH*(p.sy||1) + (p.bob||0));
+  ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (p.fx === 'zzz') {
+    ctx.font = '700 13px -apple-system, sans-serif'; ctx.fillStyle = '#7f93b3';
+    [['z',0],['Z',0.5]].forEach(([ch,o])=>{ const u=((i/6)+o)%1; ctx.globalAlpha=1-u; ctx.fillText(ch, CW/2+26+u*10, headY+6-u*22); });
+  } else if (p.fx === 'notes') {
+    ctx.font = '700 15px -apple-system, sans-serif'; ctx.fillStyle = '#6b5a8e';
+    const side = i % 2 ? 1 : -1, u = (i%4)/4; ctx.globalAlpha = 1-u*0.6;
+    ctx.fillText('♪', CW/2 + side*38, Math.max(12, headY+18 - u*14));
+  }
+  ctx.restore();
+}
+
+const sheet = document.createElement('canvas');
+sheet.width = CW*COLS; sheet.height = CH*ROWS.length;
+const sctx = sheet.getContext('2d'); sctx.imageSmoothingQuality = 'high';
+ROWS.forEach((row, r) => {
+  for (let i = 0; i < row.n; i++) {
+    const p = row.f(i, row.n) || {};
+    pose(p); renderer.render(scene, camera);
+    sctx.save(); sctx.translate(i*CW, r*CH);
+    sctx.drawImage(renderer.domElement, 0, 0, CW, CH); drawFx(sctx, p, i);
+    sctx.restore();
+  }
+});
+const meta = { cell:[CW,CH], displayPoints:[CW/2,CH/2], ...(LABEL ? { displayName: LABEL } : {}),
+               rows: ROWS.map(r=>({ name:r.key, label:r.label, frames:r.n, fps:r.fps })) };
+const blob = await new Promise(res => sheet.toBlob(res, 'image/png'));
+if (SAVE) {
+  await fetch(`/save?name=${NAME}-sheet.png`, { method:'POST', body:blob });
+  await fetch(`/save?name=${NAME}-sheet.json`, { method:'POST', body:JSON.stringify(meta, null, 2) });
+}
+document.getElementById('sheet').src = URL.createObjectURL(blob);
+status.textContent = SAVE ? `저장함: tools/sheet-maker/out/${NAME}-sheet.png, ${NAME}-sheet.json → ~/.tabpet/ 로 복사하세요` : '미리보기만 (저장 안 함)';
+
+const rowsEl = document.getElementById('rows');
+ROWS.forEach((row, r) => {
+  const d = document.createElement('div'); d.className = 'row';
+  const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH; cv.style.width = CW*0.375+'px'; cv.style.height = CH*0.375+'px';
+  d.append(cv); d.insertAdjacentHTML('beforeend', `<b>${row.label}</b><span>${row.n}프레임 · ${row.fps}fps</span>`);
+  rowsEl.append(d);
+  const ctx = cv.getContext('2d'); let i = 0, last = 0;
+  (function tick(t) {
+    if (t - last >= 1000/row.fps) { last = t; i = (i+1) % row.n; }
+    ctx.clearRect(0,0,CW,CH); ctx.drawImage(sheet, i*CW, r*CH, CW, CH, 0, 0, CW, CH);
+    requestAnimationFrame(tick);
+  })(0);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+// Entry point: a menu bar icon whose menu turns the character and its voice on or
+// off. The character itself is Pet.swift.
+import AppKit
+
+
+final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let menu = NSMenu()
+    let voice = Voice()
+    var pets: [String: Pet] = [:]
+
+    var shown: Bool {
+        get { UserDefaults.standard.object(forKey: "petShown") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "petShown"); refresh() }
+    }
+    // The characters out on screen, in the order they were picked.
+    var chosen: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "petCharacters")
+                ?? [PET_NAME] }
+        set { UserDefaults.standard.set(newValue, forKey: "petCharacters"); refresh() }
+    }
+
+    // Start the chosen ones that aren't out yet, put away the rest.
+    func refresh() {
+        let want = shown ? chosen : []
+        for (name, pet) in pets where !want.contains(name) { pet.stop(); pets[name] = nil }
+        for (i, name) in want.enumerated() where pets[name] == nil {
+            guard let pet = Pet(name, voice: voice, slot: i) else { continue }
+            pets[name] = pet; pet.start()
+        }
+    }
+
+    func applicationDidFinishLaunching(_ n: Notification) {
+        menu.delegate = self
+        menu.autoenablesItems = false
+        item.menu = menu
+        let img = NSImage(systemSymbolName: "pawprint", accessibilityDescription: "TabPet")
+        img?.isTemplate = true
+        item.button?.image = img
+        item.button?.toolTip = "TabPet"
+        refresh()
+    }
+
+    func menuNeedsUpdate(_ m: NSMenu) {
+        m.removeAllItems()
+        let list = petCharacters()
+        let petItem = action(list.isEmpty ? "화면 캐릭터 (그림 없음: \(PET_DIR))" : "화면에 캐릭터 띄우기", #selector(togglePet))
+        petItem.state = shown && !list.isEmpty ? .on : .off
+        petItem.isEnabled = !list.isEmpty
+        m.addItem(petItem)
+        let voiceItem = action("캐릭터 소리", #selector(togglePetSound))
+        voiceItem.state = voice.on ? .on : .off
+        voiceItem.isEnabled = !list.isEmpty && shown
+        m.addItem(voiceItem)
+        if list.count > 1 {
+            // Tick as many as you like; at least one stays.
+            let sub = NSMenu()
+            sub.autoenablesItems = false
+            let picked = chosen
+            for name in list {
+                let i = action(characterLabel(name), #selector(choose(_:)))
+                i.representedObject = name
+                i.state = picked.contains(name) ? .on : .off
+                i.isEnabled = !(picked == [name])
+                sub.addItem(i)
+            }
+            let chars = NSMenuItem(title: "캐릭터 (여러 개 고를 수 있음)", action: nil, keyEquivalent: "")
+            chars.submenu = sub
+            m.addItem(chars)
+        }
+        m.addItem(.separator())
+        m.addItem(action("종료", #selector(quit), key: "q"))
+    }
+
+    func action(_ s: String, _ sel: Selector, key: String = "") -> NSMenuItem {
+        let i = NSMenuItem(title: s, action: sel, keyEquivalent: key); i.target = self; return i
+    }
+
+    @objc func choose(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        var c = chosen
+        if let i = c.firstIndex(of: name) { if c.count > 1 { c.remove(at: i) } } else { c.append(name) }
+        chosen = c
+    }
+    @objc func togglePet() { shown.toggle() }
+    @objc func togglePetSound() { voice.on.toggle() }
+    @objc func quit() { NSApp.terminate(nil) }
+}
+
+// One copy of the app at a time: a second copy would put the characters on screen twice.
+if let id = Bundle.main.bundleIdentifier,
+   NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0.processIdentifier != getpid() }) {
+    exit(0)
+}
+
+let app = NSApplication.shared
+let delegate = App()
+app.delegate = delegate
+app.setActivationPolicy(.accessory)
+app.run()

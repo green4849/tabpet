@@ -1,0 +1,43 @@
+{
+  "cell": [
+    128,
+    138
+  ],
+  "displayPoints": [
+    64,
+    69
+  ],
+  "displayName": "새싹이",
+  "rows": [
+    {
+      "name": "idle",
+      "label": "쉬기",
+      "frames": 6,
+      "fps": 6
+    },
+    {
+      "name": "walk",
+      "label": "걷기",
+      "frames": 8,
+      "fps": 10
+    },
+    {
+      "name": "sleep",
+      "label": "졸기",
+      "frames": 6,
+      "fps": 3
+    },
+    {
+      "name": "dance",
+      "label": "춤",
+      "frames": 8,
+      "fps": 8
+    },
+    {
+      "name": "fall",
+      "label": "떨어지기",
+      "frames": 4,
+      "fps": 10
+    }
+  ]
+}
