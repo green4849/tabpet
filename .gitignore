@@ -2,3 +2,6 @@ build/
 .DS_Store
 tools/sheet-maker/out/
 tools/**/*.glb
+windows/bin/
+windows/obj/
+dist/

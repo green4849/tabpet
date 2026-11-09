@@ -1,0 +1,60 @@
+# Builds both apps on every push. Pushing a tag like v0.1.0 also makes a GitHub release
+# with ready-to-run downloads: TabPet-windows.zip and TabPet-mac.zip.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build
+        run: dotnet publish windows/TabPet.csproj -c Release -r win-x64 -o dist/TabPet
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/TabPet -DestinationPath TabPet-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TabPet-windows
+          path: TabPet-windows.zip
+
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: TABPET_DEST="$PWD/dist" sh mac/build.sh
+      - name: Zip
+        run: cd dist && ditto -c -k --keepParent TabPet.app ../TabPet-mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TabPet-mac
+          path: TabPet-mac.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" TabPet-windows.zip TabPet-mac.zip \
+            --repo "${{ github.repository }}" --title "TabPet ${{ github.ref_name }}" \
+            --notes "Windows: TabPet-windows.zip / Mac (Apple Silicon): TabPet-mac.zip. 설치 방법은 README를 보세요."

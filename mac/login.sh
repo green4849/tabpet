@@ -1,13 +1,13 @@
 #!/bin/sh
 # Start the pet when you log in (on), or stop doing so (off).
-# Run: sh login.sh on|off
+# Run: sh mac/login.sh on|off
 set -e
 LABEL=io.github.green4849.tabpet
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 APP="${TABPET_DEST:-$HOME/Applications}/TabPet.app"
 case "$1" in
   on)
-    [ -d "$APP" ] || { echo "Build it first: sh build.sh"; exit 1; }
+    [ -d "$APP" ] || { echo "Build it first: sh mac/build.sh"; exit 1; }
     mkdir -p "$(dirname "$PLIST")"
     cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -29,5 +29,5 @@ PL
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
     rm -f "$PLIST"
     echo "off" ;;
-  *) echo "usage: sh login.sh on|off"; exit 1 ;;
+  *) echo "usage: sh mac/login.sh on|off"; exit 1 ;;
 esac

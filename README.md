@@ -1,11 +1,11 @@
 # TabPet
 
-A tiny macOS desktop pet that walks in Chrome's tab strip (or along the Dock), dances when
+A tiny desktop pet for macOS and Windows that walks in Chrome's tab strip (or along the Dock / taskbar), dances when
 music plays and dozes when you're away. Bring your own characters: make a 3D model (an AI
 assistant can write one for you), turn it into a sprite sheet with the included tool, drop it in
 `~/.tabpet/`. No permissions needed. The guide below is in Korean.
 
-크롬 탭 줄(주소창 위 빈 곳)이나 Dock 위를 걸어 다니는 작은 macOS 데스크톱 펫입니다.
+크롬 탭 줄(주소창 위 빈 곳)이나 Dock·작업 표시줄 위를 걸어 다니는 작은 데스크톱 펫입니다. 맥과 윈도우에서 돌아갑니다.
 노래가 나오면 춤추고, 자리를 비우면 졸다가 돌아오면 반겨 줍니다. 캐릭터는 직접 만들어 넣습니다.
 레포에는 예시 캐릭터 "새싹이" 하나만 들어 있습니다.
 
@@ -13,23 +13,45 @@ assistant can write one for you), turn it into a sprite sheet with the included 
 
 ## 설치
 
-macOS 14 이상, Apple Silicon. Xcode 없이 Command Line Tools(`xcode-select --install`)만 있으면 됩니다.
+### 받아서 바로 쓰기
+
+[Releases](https://github.com/green4849/tabpet/releases)에서 내 컴퓨터에 맞는 파일을 받습니다.
+
+- **윈도우** (Windows 10·11, 64비트): `TabPet-windows.zip`을 풀고 `TabPet.exe`를 실행합니다.
+  처음 실행할 때 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누르세요(서명하지 않은 앱이라 뜨는 안내입니다).
+  알림 영역(시계 옆, 안 보이면 `^`)의 아이콘을 누르면 메뉴가 나옵니다.
+- **맥** (Apple Silicon, macOS 14 이상): `TabPet-mac.zip`을 풀고 `TabPet.app`을 응용 프로그램 폴더로 옮깁니다.
+  처음에는 **우클릭 → 열기 → 열기**로 실행하세요(서명하지 않은 앱이라 그냥 열면 막힙니다).
+  메뉴 막대의 발바닥 아이콘이 메뉴입니다.
+
+### 직접 빌드하기
+
+**맥**: Xcode 없이 Command Line Tools(`xcode-select --install`)만 있으면 됩니다.
 
 ```sh
 git clone https://github.com/green4849/tabpet.git
 cd tabpet
-sh build.sh                      # → ~/Applications/TabPet.app
+sh mac/build.sh                  # → ~/Applications/TabPet.app
 open ~/Applications/TabPet.app
-sh login.sh on                   # 로그인할 때 자동 실행 (끄기: sh login.sh off)
+sh mac/login.sh on               # 로그인할 때 자동 실행 (끄기: sh mac/login.sh off)
 ```
 
-메뉴 막대의 발바닥 아이콘이 TabPet입니다. 한 번에 하나만 실행됩니다.
+**윈도우**: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)가 필요합니다.
+
+```powershell
+git clone https://github.com/green4849/tabpet.git
+cd tabpet
+dotnet publish windows/TabPet.csproj -c Release -r win-x64 -o dist/TabPet
+dist\TabPet\TabPet.exe
+```
+
+윈도우에서 자동 실행은 메뉴의 "Windows 시작할 때 실행"으로 켜고 끕니다. 두 버전 모두 한 번에 하나만 실행됩니다.
 
 ## 하는 일
 
 | 상황 | 행동 |
 |---|---|
-| 평소 | 맨 앞 크롬 창의 탭 줄 빈 곳에서 천천히 걷다가 가끔 쉼. 크롬 창이 없으면 화면 아래(Dock 위) |
+| 평소 | 맨 앞 크롬 창의 탭 줄 빈 곳에서 천천히 걷다가 가끔 쉼. 크롬 창이 없으면 화면 아래(Dock·작업 표시줄 위) |
 | 크롬 창을 옮기거나 바꿀 때 | 창을 따라가고, 다른 창에 가려진 곳은 피하고, 창이 닫히면 떨어짐. 크롬이 다른 모니터에 있으면 그쪽으로 감 |
 | 크롬 창 위로 뛰어오를 때 | `hop` |
 | 소리가 3초 넘게 날 때 | 춤 (시작할 때 `dance` 소리 한 번). 자기 소리 뒤 3초는 무시 |
@@ -42,27 +64,31 @@ sh login.sh on                   # 로그인할 때 자동 실행 (끄기: sh lo
   자리를 비운 동안에는 조는 순간의 `sleep` 말고는 소리를 내지 않습니다.
   여러 캐릭터가 떠 있어도 목소리는 하나로 묶여 있어 전체에 한 번만 적용됩니다.
 - 메뉴: 화면에 캐릭터 띄우기 / 캐릭터 소리 / 캐릭터(여러 개 고를 수 있음) / 종료.
+  윈도우판에는 "Windows 시작할 때 실행", "내 캐릭터 폴더 열기"가 더 있습니다.
 - 권한 요청이 없습니다. 소리는 "출력 장치가 쓰이는 중인가", 자리 비움은 "마지막 입력 후 몇 초"만 봅니다.
   창 정보는 위치와 앱 이름만 읽습니다(제목, 화면 녹화 없음).
-- 소리 재생 기록: `/usr/bin/log show --last 10m --predicate 'eventMessage CONTAINS "pet voice"'`
+- 소리 재생 기록: 맥은 `/usr/bin/log show --last 10m --predicate 'eventMessage CONTAINS "pet voice"'`,
+  윈도우는 `%APPDATA%\TabPet\log.txt`.
 
 ### 크기와 탭 줄 맞추기
 
-캐릭터는 그림의 75% 크기(창 48×52pt)로 뜹니다. 탭이 어디서 끝나는지는 손쉬운 사용 권한 없이는 알 수 없어서
-탭 줄 높이 40pt, 왼쪽 400pt(창 버튼과 첫 탭 한두 개), 오른쪽 180pt를 비워 두고 그 사이를 걷습니다.
-탭이 많으면 탭 위를 지나갈 수 있습니다. 바꾼 뒤 앱을 다시 켜세요.
+캐릭터는 그림의 75% 크기로 뜹니다. 탭이 어디서 끝나는지는 읽을 수 없어서(맥은 손쉬운 사용 권한이 있어야 함)
+탭 줄 높이 40, 왼쪽·오른쪽 끝의 일정 폭을 비워 두고 그 사이를 걷습니다. 탭이 많으면 탭 위를 지나갈 수 있습니다.
 
-```sh
-defaults write io.github.green4849.tabpet tabStripLeft -float 600
-defaults write io.github.green4849.tabpet tabStripRight -float 180
-defaults write io.github.green4849.tabpet tabStripHeight -float 40
-defaults write io.github.green4849.tabpet petScale -float 1     # 원래 크기
-```
+| 값 | 뜻 | 맥 기본 | 윈도우 기본 |
+|---|---|---|---|
+| `tabStripHeight` | 탭 줄 높이 | 40 | 40 |
+| `tabStripLeft` | 왼쪽에서 비울 폭 (창 버튼·탭) | 400 | 300 |
+| `tabStripRight` | 오른쪽에서 비울 폭 (오른쪽 버튼) | 180 | 260 |
+| 크기 | 그림 대비 크기 | `petScale` 0.75 | `scale` 0.75 |
+
+- **맥**: `defaults write io.github.green4849.tabpet tabStripLeft -float 600` 처럼 쓰고 앱을 다시 켭니다.
+- **윈도우**: TabPet을 종료하고 `%APPDATA%\TabPet\settings.json`의 숫자를 고친 뒤 다시 켭니다.
 
 ## 캐릭터 직접 만들기 (AI 활용)
 
 TabPet의 캐릭터는 **그림 시트 한 장**(`<이름>-sheet.png` + `<이름>-sheet.json`)입니다.
-`~/.tabpet/`에 넣으면 메뉴 "캐릭터"에 나타납니다. 만드는 순서는 3D 모델 만들기 → 시트로 찍기 → 넣기입니다.
+`~/.tabpet/`(윈도우는 `C:\Users\내이름\.tabpet\`, 메뉴의 "내 캐릭터 폴더 열기")에 넣으면 메뉴 "캐릭터"에 나타납니다. 만드는 순서는 3D 모델 만들기 → 시트로 찍기 → 넣기입니다.
 
 ### 먼저: 저작권
 
@@ -126,8 +152,11 @@ http://127.0.0.1:4660/sheet-maker/?model=../example-character/sprout.glb&name=sp
 ### 3단계. 넣기
 
 ```sh
-mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/
+mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      # 맥
 ```
+
+윈도우는 `tools\sheet-maker\out\`의 두 파일을 메뉴 "내 캐릭터 폴더 열기"로 연 폴더에 복사하면 됩니다.
+1·2단계(파이썬, 브라우저)는 맥과 윈도우 모두에서 똑같이 됩니다. 윈도우에서는 `python3` 대신 `python`이나 `py`를 쓰세요.
 
 메뉴 "캐릭터"에서 고르면 바로 나옵니다. 여러 개를 동시에 띄울 수 있습니다.
 
@@ -159,7 +188,7 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/
 
 ### 소리
 
-동작마다 소리 하나씩입니다. `~/.tabpet/sounds/`에 같은 이름의 짧은 소리(m4a·wav·mp3·aiff·caf)를 넣으면
+동작마다 소리 하나씩입니다. `~/.tabpet/sounds/`에 같은 이름의 짧은 소리(맥: m4a·wav·mp3·aiff·caf, 윈도우: wav·mp3)를 넣으면
 예시 소리 대신 씁니다. `poke-1.m4a`, `poke-2.m4a`처럼 번호를 붙이면 그중 하나를 고르고, 없는 소리는 건너뜁니다.
 
 | 파일 이름 | 언제 | 예시 소리 |
@@ -178,11 +207,13 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/
 
 | 경로 | 내용 |
 |---|---|
-| `Sources/` | 앱 (Swift, AppKit) |
+| `mac/` | 맥 앱 (Swift, AppKit) |
+| `windows/` | 윈도우 앱 (C#, .NET 8, Windows Forms) |
+| `.github/workflows/` | GitHub에서 두 앱을 자동으로 빌드하고, 태그를 달면 Releases에 올림 |
 | `characters/` | 앱에 함께 들어가는 예시 캐릭터와 소리 |
 | `tools/example-character/` | 예시 캐릭터 모델과 소리를 만드는 스크립트 |
 | `tools/sheet-maker/` | .glb를 그림 시트로 찍는 페이지와 로컬 서버 |
-| `~/.tabpet/` | 내 캐릭터와 소리 (레포 밖) |
+| `~/.tabpet/` | 내 캐릭터와 소리 (레포 밖. 윈도우는 `C:\Users\내이름\.tabpet\`) |
 
 ## 라이선스
 
