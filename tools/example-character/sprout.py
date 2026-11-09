@@ -34,6 +34,35 @@ def on_body(x, y, lift=0.0):
     u = 1 - (x / BODY_R[0]) ** 2 - ((y - BODY_C[1]) / BODY_R[1]) ** 2
     return np.array([x, y, BODY_R[2] * np.sqrt(max(u, 0)) + lift])
 
+def on_back(x, y, sink=0.0):
+    """a point on the back of the body at height y and sideways x"""
+    u = 1 - (x / BODY_R[0]) ** 2 - ((y - BODY_C[1]) / BODY_R[1]) ** 2
+    return np.array([x, y, -BODY_R[2] * np.sqrt(max(u, 0)) + sink])
+
+# The maker's initials, written on the back of the head as a row of small beads.
+# Letters are drawn in a 0..0.75 x 0..1 box (u to the right, v up, as read from behind).
+LETTERS = {
+    "P": [[(0, 0), (0, 1)], [(0, 1), (0.5, 1), (0.72, 0.9), (0.75, 0.75), (0.72, 0.6), (0.5, 0.5), (0, 0.5)]],
+    "S": [[(0.72, 0.88), (0.55, 1), (0.2, 1), (0.02, 0.86), (0.02, 0.66), (0.2, 0.54), (0.55, 0.46),
+           (0.73, 0.34), (0.73, 0.14), (0.55, 0), (0.2, 0), (0.02, 0.12)]],
+    "Y": [[(0, 1), (0.375, 0.5)], [(0.75, 1), (0.375, 0.5)], [(0.375, 0.5), (0.375, 0)]],
+}
+def initials(text, center_y=0.31, height=0.07, gap=0.022, bead=0.0058, step=0.0035):
+    widths = [0.75 * height for _ in text]
+    total = sum(widths) + gap * (len(text) - 1)
+    beads, left = [], -total / 2
+    for ch, w in zip(text, widths):
+        for stroke in LETTERS[ch]:
+            for (u0, v0), (u1, v1) in zip(stroke, stroke[1:]):
+                n = max(2, int(np.hypot((u1 - u0) * height, (v1 - v0) * height) / step))
+                for t in np.linspace(0, 1, n):
+                    u = left + (u0 + (u1 - u0) * t) * height
+                    v = center_y + ((v0 + (v1 - v0) * t) - 0.5) * height
+                    # seen from behind, the reader's right is -x
+                    beads.append(ellipsoid(on_back(-u, v, 0.002), np.array([bead, bead, bead * 0.7]), nlat=6, nlon=8))
+        left += w + gap
+    return beads
+
 parts = {   # name: (colour sRGB, roughness, [ellipsoids])
     "body":   ((246, 238, 220), 0.8, [ellipsoid(BODY_C, BODY_R)]),
     "feet":   ((236, 222, 196), 0.8, [ellipsoid(np.array([s * 0.09, 0.03, 0.05]), np.array([0.065, 0.035, 0.075])) for s in (-1, 1)]),
@@ -42,6 +71,7 @@ parts = {   # name: (colour sRGB, roughness, [ellipsoids])
     "shine":  ((255, 255, 255), 0.3, [ellipsoid(on_body(s * 0.075 - 0.008, 0.312, 0.004), np.array([0.008, 0.009, 0.004])) for s in (-1, 1)]),
     "cheeks": ((245, 170, 175), 0.9, [ellipsoid(on_body(s * 0.145, 0.245, -0.008), np.array([0.04, 0.022, 0.012])) for s in (-1, 1)]),
     "mouth":  ((90, 50, 45), 0.6, [ellipsoid(on_body(0, 0.25, -0.004), np.array([0.016, 0.008, 0.008]))]),
+    "initials": ((150, 118, 92), 0.7, initials("PSY")),
     "stem":   ((110, 170, 90), 0.7, [ellipsoid(np.array([0, 0.55, -0.01]), np.array([0.012, 0.05, 0.012]))]),
     "leaves": ((126, 196, 104), 0.7, [ellipsoid(np.array([s * 0.06, 0.6, -0.01]), np.array([0.065, 0.02, 0.035]), rot=rot_z(s * 0.45)) for s in (-1, 1)]),
 }
