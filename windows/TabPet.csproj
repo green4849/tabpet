@@ -12,6 +12,8 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Version>0.1.0</Version>
   </PropertyGroup>
