@@ -29,7 +29,7 @@
   <h1>TabPet sheet maker</h1>
   <p class="sub">3D 모델(.glb)을 고정 카메라로 찍어 TabPet용 그림 시트를 만듭니다. 주소 뒤에
   <code>?model=../example-character/sprout.glb&amp;name=sprout&amp;label=새싹이</code>처럼 붙이세요.
-  <code>turn=180</code>(뒤를 보고 있을 때 돌리는 각도), <code>bright=1.5</code>(어두울 때 밝히기), <code>save=0</code>(저장 안 함)도 쓸 수 있습니다.
+  <code>turn=180</code>(뒤를 보고 있을 때 돌리는 각도), <code>bright=1.5</code>(어두울 때 밝히기), <code>climb=jump</code>(크롬 탭 줄로 올라가는 방식), <code>save=0</code>(저장 안 함)도 쓸 수 있습니다.
   열면 <code>tools/sheet-maker/out/&lt;name&gt;-sheet.png/.json</code>으로 저장됩니다. 아래 칸은 실제 화면 크기(75%)입니다.</p>
   <div class="rows" id="rows"></div>
   <img id="sheet" alt="sprite sheet">
@@ -47,6 +47,8 @@ const LABEL = q.get('label') || '';
 const TURN = (parseFloat(q.get('turn')) || 0) * Math.PI / 180;
 const BRIGHT = parseFloat(q.get('bright')) || 1;
 const SAVE = q.get('save') !== '0';
+// how it gets up to a tab strip far above: jump, balloon, fly, steps or poof (the app's default)
+const CLIMB = ['jump', 'balloon', 'fly', 'steps', 'poof'].includes(q.get('climb')) ? q.get('climb') : null;
 document.title = `${NAME} · TabPet sheet maker`;
 
 const CW = 128, CH = 138, COLS = 8, SS = 2;          // cell size (px), columns, supersampling
@@ -64,6 +66,9 @@ const ROWS = [
       if (i < 4) { const s=Math.sin(TAU*i/4); return { tilt:s*0.22, spin:s*0.45, bob:Math.abs(Math.cos(TAU*i/4))*8, fx:'notes' }; }
       return { spin:(i-3)*TAU/5, bob:6, sy:1.03, fx:'notes' }; } },
   { key:'fall',  label:'떨어지기', n:4, fps:10, f:(i)=>[{ bob:30, sy:1.12, sx:0.92 }, { bob:12, sy:1.08, sx:0.95 }, { sy:0.8, sx:1.15 }, {}][i] },
+  // used by climb=jump: 0 crouch, 1 stretch and leap, 2–5 a spin in the air
+  { key:'climb', label:'크게 점프', n:6, fps:10, f:(i)=>[{ sy:0.78, sx:1.16 }, { bob:10, sy:1.16, sx:0.9 },
+      { bob:14, spin:TAU*0.25, sy:1.04 }, { bob:14, spin:TAU*0.5, sy:1.04 }, { bob:14, spin:TAU*0.75, sy:1.04 }, { bob:14, spin:TAU, sy:1.04 }][i] },
 ];
 
 const status = document.getElementById('status');
@@ -127,7 +132,7 @@ ROWS.forEach((row, r) => {
     sctx.restore();
   }
 });
-const meta = { cell:[CW,CH], displayPoints:[CW/2,CH/2], ...(LABEL ? { displayName: LABEL } : {}),
+const meta = { cell:[CW,CH], displayPoints:[CW/2,CH/2], ...(LABEL ? { displayName: LABEL } : {}), ...(CLIMB ? { climb: CLIMB } : {}),
                rows: ROWS.map(r=>({ name:r.key, label:r.label, frames:r.n, fps:r.fps })) };
 const blob = await new Promise(res => sheet.toBlob(res, 'image/png'));
 document.getElementById('sheet').src = URL.createObjectURL(blob);

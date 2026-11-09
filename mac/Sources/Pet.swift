@@ -56,7 +56,13 @@ func characterDir(_ name: String) -> String? {
 }
 
 struct PetRow: Decodable { let name: String; let frames: Int; let fps: Double }
-struct PetSheet: Decodable { let cell: [Int]; let displayPoints: [Double]; let rows: [PetRow]; let displayName: String? }
+struct PetSheet: Decodable { let cell: [Int]; let displayPoints: [Double]; let rows: [PetRow]; let displayName: String?; let climb: String? }
+
+// How a character gets up to a Chrome tab strip far above it (see Pet.startHop), from the
+// sheet's "climb": jump (crouch and leap, using a "climb" row if there is one), balloon or
+// fly (float or flap up slowly, "climb" row), steps (several little hops) or poof (shrink
+// away and pop up there, the default).
+let CLIMB_STYLES: Set<String> = ["jump", "balloon", "fly", "steps", "poof"]
 
 // The name shown in the menu: the sheet's "displayName", else the file name.
 func characterLabel(_ name: String) -> String {
@@ -69,6 +75,7 @@ final class Sprite {
     let frames: [String: [CGImage]]
     let fps: [String: Double]
     let size: NSSize
+    let climb: String
 
     init?(name: String) {
         guard let dir = characterDir(name) else { return nil }
@@ -86,6 +93,7 @@ final class Sprite {
         }
         guard f["idle"]?.isEmpty == false, f["walk"]?.isEmpty == false else { return nil }
         frames = f; fps = r
+        climb = CLIMB_STYLES.contains(sheet.climb ?? "") ? sheet.climb! : "poof"
         size = NSSize(width: sheet.displayPoints[0] * PET_SCALE, height: sheet.displayPoints[1] * PET_SCALE)
     }
 }
@@ -340,10 +348,12 @@ final class PetView: NSView {
         last = nil
     }
 
-    func show(_ img: CGImage, mirrored: Bool) {
+    func show(_ img: CGImage, mirrored: Bool, scale: CGFloat = 1) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         sprite.contents = img
-        sprite.setAffineTransform(mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity)
+        // shrink toward the feet (the bottom middle), not the centre
+        let drop = -(1 - scale) * bounds.height / 2
+        sprite.setAffineTransform(CGAffineTransform(translationX: 0, y: drop).scaledBy(x: mirrored ? -scale : scale, y: scale))
         CATransaction.commit()
     }
 }
@@ -376,7 +386,8 @@ final class Pet {
     private var target: Int? = nil, targetSince = 0.0  // the frontmost Chrome window, and since when
     private var targetScreen: NSScreen? = nil
     private var declined: Int? = nil                    // dragged off this window: leave it alone
-    private var hop: (from: NSPoint, to: NSPoint, t: Double, dur: Double, floor: Floor)? = nil
+    // A jump onto a floor. Up to a strip far above, it goes the character's own way (style).
+    private var hop: (from: NSPoint, to: NSPoint, t: Double, dur: Double, floor: Floor, style: String, steps: Int)? = nil
     private var restUntil = 0.0, nextRest = CACurrentMediaTime() + 12
     private var row = "idle", frame = 0, phase = 0.0
     private var last = CACurrentMediaTime()
@@ -498,21 +509,70 @@ final class Pet {
         let minX = here.minX, maxX = here.maxX - size.width
         var want = "idle", speed: CGFloat = 0
         var fixed: Int? = nil
+        var scale: CGFloat = 1, alpha: CGFloat = 1
 
         if dragging {
             want = "fall"; fixed = 0
         } else if var h = hop {
-            // A small jump in an arc up (or down) onto a tab strip.
             h.t += dt; hop = h
             let p = CGFloat(min(1, h.t / h.dur))
-            let rise = max(h.to.y, h.from.y) + 40 * PET_SCALE
-            x = h.from.x + (h.to.x - h.from.x) * p
-            // A parabola through from (p=0), the top (rise) and to (p=1).
-            let a = h.from.y, c = h.to.y, b = 2 * rise - (a + c) / 2
-            y = a * (1 - p) * (1 - p) + 2 * b * p * (1 - p) + c * p * p
-            want = "fall"; fixed = p < 0.5 ? 0 : 1
+            let S = PET_SCALE, lerpX = h.from.x + (h.to.x - h.from.x) * p
+            let hasClimb = sprite.frames["climb"]?.isEmpty == false
+            // A parabola from a (q=0) through rise (q=0.5) to c (q=1).
+            func arc(_ a: CGFloat, _ c: CGFloat, _ rise: CGFloat, _ q: CGFloat) -> CGFloat {
+                let b = 2 * rise - (a + c) / 2
+                return a * (1 - q) * (1 - q) + 2 * b * q * (1 - q) + c * q * q
+            }
             dir = h.to.x >= h.from.x ? 1 : -1
-            if p >= 1 { floor = h.floor; y = h.to.y; hop = nil; landing = 0.3 }
+            switch h.style {
+            case "jump":
+                // crouch, then one big leap (with a spin when the sheet has a "climb" row)
+                let crouch = CGFloat(0.3 / h.dur)
+                if p < crouch {
+                    x = h.from.x; y = h.from.y
+                    want = hasClimb ? "climb" : "fall"; fixed = hasClimb ? 0 : 2
+                } else {
+                    let q = (p - crouch) / (1 - crouch)
+                    x = h.from.x + (h.to.x - h.from.x) * q
+                    // rises fast and slows near the strip, with a little extra lift that
+                    // never takes it off the top of the screen
+                    let top = (home?.frame.maxY ?? .greatestFiniteMagnitude) - size.height
+                    let lift = max(0, min(35 * S, top - h.to.y))
+                    y = h.from.y + (h.to.y - h.from.y) * (1 - (1 - q) * (1 - q)) + lift * sin(.pi * q)
+                    want = hasClimb ? "climb" : "fall"; fixed = hasClimb ? 1 + min(4, Int(q * 5)) : (q < 0.5 ? 0 : 1)
+                }
+            case "balloon":
+                // floats up slowly, swaying
+                let e = p * p * (3 - 2 * p)
+                x = lerpX + sin(p * .pi * 3) * 8 * S
+                y = h.from.y + (h.to.y - h.from.y) * e
+                want = hasClimb ? "climb" : "idle"
+            case "fly":
+                // flaps up quickly at first, then eases in, bobbing
+                let e = 1 - (1 - p) * (1 - p)
+                x = lerpX + sin(p * .pi * 3) * 12 * S
+                y = h.from.y + (h.to.y - h.from.y) * e + sin(p * .pi * 6) * 5 * S * (1 - p)
+                want = hasClimb ? "climb" : "dance"
+            case "steps":
+                // several little hops, one after another
+                let n = CGFloat(h.steps), k = min(n - 1, (p * n).rounded(.down)), q = p * n - k
+                let ay = h.from.y + (h.to.y - h.from.y) * k / n, cy = h.from.y + (h.to.y - h.from.y) * (k + 1) / n
+                x = lerpX
+                y = arc(ay, cy, max(ay, cy) + 22 * S, q)
+                want = "fall"; fixed = q < 0.5 ? 0 : 1
+            case "poof":
+                // shrinks away where it is, and pops up again on the strip
+                if p < 0.35 { x = h.from.x; y = h.from.y; scale = 1 - p / 0.35 * 0.85; alpha = 1 - p / 0.35 }
+                else if p < 0.55 { x = h.to.x; y = h.to.y; scale = 0.15; alpha = 0 }
+                else { let q = (p - 0.55) / 0.45; x = h.to.x; y = h.to.y; scale = 0.15 + 0.85 * q; alpha = q }
+                want = "idle"; fixed = 0
+            default:
+                // a small jump in an arc up (or down) to a strip close by
+                x = lerpX
+                y = arc(h.from.y, h.to.y, max(h.to.y, h.from.y) + 40 * S, p)
+                want = "fall"; fixed = p < 0.5 ? 0 : 1
+            }
+            if p >= 1 { floor = h.floor; x = h.to.x; y = h.to.y; hop = nil; landing = h.style == "poof" ? 0 : 0.3; scale = 1; alpha = 1 }
         } else if falling {
             let before = y
             vy -= 2200 * dt; y += vy * dt
@@ -562,7 +622,8 @@ final class Pet {
             }
         }
         frame = min(frame, frames.count - 1)
-        v.show(frames[frame], mirrored: want == "walk" && dir < 0)
+        v.show(frames[frame], mirrored: want == "walk" && dir < 0, scale: scale)
+        if w.alphaValue != alpha { w.alphaValue = alpha }
         w.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -576,11 +637,24 @@ final class Pet {
     }
 
     // Jump to a floor on the same screen: land as close to where it is as the floor allows.
+    // A short way, or down, is a small hop. Far up (from the Dock to a tab strip) each
+    // character goes its own way, slower, so it doesn't just shoot up the screen.
     private func startHop(to f: Floor, size: NSSize) {
         voice.want(.hop)
         let to = NSPoint(x: clampX(x, on: f, size.width), y: f.y - feet)
-        let d = hypot(to.x - x, to.y - y)
-        hop = (from: NSPoint(x: x, y: y), to: to, t: 0, dur: min(0.9, 0.45 + Double(d) / 2000), floor: f)
+        let d = hypot(to.x - x, to.y - y), rise = Double((to.y - y) / PET_SCALE)
+        let style = rise > 120 ? sprite.climb : "hop"
+        let steps = max(2, Int((rise / 70).rounded(.up)))
+        let dur: Double
+        switch style {
+        case "jump": dur = 1.5
+        case "balloon": dur = min(3.5, max(1.8, rise / 280))
+        case "fly": dur = min(2.6, max(1.3, rise / 380))
+        case "steps": dur = Double(steps) * 0.34
+        case "poof": dur = 1.0
+        default: dur = min(0.9, 0.45 + Double(d) / 2000)
+        }
+        hop = (from: NSPoint(x: x, y: y), to: to, t: 0, dur: dur, floor: f, style: style, steps: steps)
         floor = nil
     }
 

@@ -21,6 +21,10 @@ namespace TabPet
         readonly Dictionary<string, double> fps = new Dictionary<string, double>();
         readonly Dictionary<string, IntPtr> cache = new Dictionary<string, IntPtr>();
         public readonly double Width, Height;   // in 96-dpi units, before the size setting
+        // How it gets up to a tab strip far above (see Pet.StartHop), from the sheet's "climb":
+        // jump, balloon, fly, steps or poof (the default).
+        public string Climb { get; private set; } = "poof";
+        static readonly HashSet<string> ClimbStyles = new HashSet<string> { "jump", "balloon", "fly", "steps", "poof" };
 
         Sprite(double w, double h) { Width = w; Height = h; }
 
@@ -34,6 +38,7 @@ namespace TabPet
                 int cw = root.GetProperty("cell")[0].GetInt32(), ch = root.GetProperty("cell")[1].GetInt32();
                 var dp = root.GetProperty("displayPoints");
                 var s = new Sprite(dp[0].GetDouble(), dp[1].GetDouble());
+                if (root.TryGetProperty("climb", out var cl) && cl.ValueKind == JsonValueKind.String && ClimbStyles.Contains(cl.GetString())) s.Climb = cl.GetString();
                 using var sheet = new Bitmap(Path.Combine(dir, name + "-sheet.png"));
                 int r = 0;
                 foreach (var row in root.GetProperty("rows").EnumerateArray())
@@ -131,7 +136,7 @@ namespace TabPet
             base.WndProc(ref m);
         }
 
-        public void Draw(IntPtr hbitmap, int x, int y, int w, int h)
+        public void Draw(IntPtr hbitmap, int x, int y, int w, int h, byte alpha = 255)
         {
             IntPtr screen = Native.GetDC(IntPtr.Zero);
             IntPtr mem = Native.CreateCompatibleDC(screen);
@@ -139,7 +144,7 @@ namespace TabPet
             try
             {
                 var dst = new Native.POINT(x, y); var size = new Native.SIZE(w, h); var src = new Native.POINT(0, 0);
-                var blend = new Native.BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = Native.AC_SRC_ALPHA };
+                var blend = new Native.BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = alpha, AlphaFormat = Native.AC_SRC_ALPHA };
                 Native.UpdateLayeredWindow(Handle, screen, ref dst, ref size, mem, ref src, 0, ref blend, Native.ULW_ALPHA);
             }
             finally
@@ -173,7 +178,8 @@ namespace TabPet
         IntPtr target = IntPtr.Zero, declined = IntPtr.Zero;   // front Chrome window; one it was dragged off
         double targetSince;
         Screen targetScreen;
-        sealed class Hop { public double FromX, FromY, ToX, ToY, T, Dur; public Floor To; }
+        // A jump onto a floor. Up to a strip far above, it goes the character's own way (Style).
+        sealed class Hop { public double FromX, FromY, ToX, ToY, T, Dur; public Floor To; public string Style; public int Steps; }
         Hop hop;
         double restUntil, nextRest;
         string row = "idle"; int frame; double phase;
@@ -324,20 +330,95 @@ namespace TabPet
             var here = floor ?? hop?.To ?? ground;
             double minX = here.MinX, maxX = here.MaxX - w;
             string want = "idle"; double speed = 0; int? fixedFrame = null;
+            double scale = 1, alpha = 1;
 
             if (dragging) { want = "fall"; fixedFrame = 0; }
             else if (hop != null)
             {
-                // a small jump in an arc up (or down) onto a tab strip
                 hop.T += dt;
                 double p = Math.Min(1, hop.T / hop.Dur);
-                double rise = Math.Min(hop.ToY, hop.FromY) - 40 * settings.Scale * k;
-                x = hop.FromX + (hop.ToX - hop.FromX) * p;
-                double a = hop.FromY, c = hop.ToY, b = 2 * rise - (a + c) / 2;
-                footY = a * (1 - p) * (1 - p) + 2 * b * p * (1 - p) + c * p * p;
-                want = "fall"; fixedFrame = p < 0.5 ? 0 : 1;
+                double S = settings.Scale * k, lerpX = hop.FromX + (hop.ToX - hop.FromX) * p;
+                bool hasClimb = sprite.Has("climb");
+                // a parabola from a (q=0) through rise (q=0.5) to c (q=1); y goes down, so "up" is smaller
+                static double Arc(double a, double c, double rise, double q)
+                {
+                    double b = 2 * rise - (a + c) / 2;
+                    return a * (1 - q) * (1 - q) + 2 * b * q * (1 - q) + c * q * q;
+                }
                 dir = hop.ToX >= hop.FromX ? 1 : -1;
-                if (p >= 1) { floor = hop.To; footY = hop.ToY; hop = null; landing = 0.3; }
+                switch (hop.Style)
+                {
+                    case "jump":
+                    {
+                        // crouch, then one big leap (with a spin when the sheet has a "climb" row)
+                        double crouch = 0.3 / hop.Dur;
+                        if (p < crouch)
+                        {
+                            x = hop.FromX; footY = hop.FromY;
+                            want = hasClimb ? "climb" : "fall"; fixedFrame = hasClimb ? 0 : 2;
+                        }
+                        else
+                        {
+                            double q = (p - crouch) / (1 - crouch);
+                            x = hop.FromX + (hop.ToX - hop.FromX) * q;
+                            // rises fast and slows near the strip, with a little extra lift that
+                            // never takes it off the top of the screen
+                            double lift = Math.Max(0, Math.Min(35 * S, hop.ToY - (home.Bounds.Top + h - feet)));
+                            footY = hop.FromY + (hop.ToY - hop.FromY) * (1 - (1 - q) * (1 - q)) - lift * Math.Sin(Math.PI * q);
+                            want = hasClimb ? "climb" : "fall"; fixedFrame = hasClimb ? 1 + Math.Min(4, (int)(q * 5)) : (q < 0.5 ? 0 : 1);
+                        }
+                        break;
+                    }
+                    case "balloon":
+                    {
+                        // floats up slowly, swaying
+                        double e = p * p * (3 - 2 * p);
+                        x = lerpX + Math.Sin(p * Math.PI * 3) * 8 * S;
+                        footY = hop.FromY + (hop.ToY - hop.FromY) * e;
+                        want = hasClimb ? "climb" : "idle";
+                        break;
+                    }
+                    case "fly":
+                    {
+                        // flaps up quickly at first, then eases in, bobbing
+                        double e = 1 - (1 - p) * (1 - p);
+                        x = lerpX + Math.Sin(p * Math.PI * 3) * 12 * S;
+                        footY = hop.FromY + (hop.ToY - hop.FromY) * e - Math.Sin(p * Math.PI * 6) * 5 * S * (1 - p);
+                        want = hasClimb ? "climb" : "dance";
+                        break;
+                    }
+                    case "steps":
+                    {
+                        // several little hops, one after another
+                        double n = hop.Steps, kk = Math.Min(n - 1, Math.Floor(p * n)), q = p * n - kk;
+                        double ay = hop.FromY + (hop.ToY - hop.FromY) * kk / n, cy = hop.FromY + (hop.ToY - hop.FromY) * (kk + 1) / n;
+                        x = lerpX;
+                        footY = Arc(ay, cy, Math.Min(ay, cy) - 22 * S, q);
+                        want = "fall"; fixedFrame = q < 0.5 ? 0 : 1;
+                        break;
+                    }
+                    case "poof":
+                    {
+                        // shrinks away where it is, and pops up again on the strip
+                        if (p < 0.35) { x = hop.FromX; footY = hop.FromY; scale = 1 - p / 0.35 * 0.85; alpha = 1 - p / 0.35; }
+                        else if (p < 0.55) { x = hop.ToX; footY = hop.ToY; scale = 0.15; alpha = 0; }
+                        else { double q = (p - 0.55) / 0.45; x = hop.ToX; footY = hop.ToY; scale = 0.15 + 0.85 * q; alpha = q; }
+                        want = "idle"; fixedFrame = 0;
+                        break;
+                    }
+                    default:
+                        // a small jump in an arc up (or down) to a strip close by
+                        x = lerpX;
+                        footY = Arc(hop.FromY, hop.ToY, Math.Min(hop.ToY, hop.FromY) - 40 * S, p);
+                        want = "fall"; fixedFrame = p < 0.5 ? 0 : 1;
+                        break;
+                }
+                if (p >= 1)
+                {
+                    floor = hop.To; x = hop.ToX; footY = hop.ToY;
+                    landing = hop.Style == "poof" ? 0 : 0.3;
+                    hop = null; scale = 1; alpha = 1;
+                }
             }
             else if (falling)
             {
@@ -390,16 +471,33 @@ namespace TabPet
                 while (phase >= 1) { phase -= 1; frame++; if (frame >= count) frame = 0; }
             }
             frame = Math.Min(frame, count - 1);
-            var hb = sprite.Frame(row, frame, row == "walk" && dir < 0, w, h);
-            window.Draw(hb, (int)Math.Round(x), (int)Math.Round(footY) - h + feet, w, h);
+            // shrunk (while it pops away or back) toward its feet, the bottom middle
+            int sw = Math.Max(1, (int)Math.Round(w * scale)), sh = Math.Max(1, (int)Math.Round(h * scale));
+            var hb = sprite.Frame(row, frame, row == "walk" && dir < 0, sw, sh);
+            window.Draw(hb, (int)Math.Round(x + (w - sw) / 2.0), (int)Math.Round(footY) - sh + (int)Math.Round(feet * scale), sw, sh,
+                        (byte)Math.Round(255 * Math.Clamp(alpha, 0, 1)));
         }
 
         // Jump to a floor on the same screen, landing as close to where it is as the floor allows.
+        // A short way, or down, is a small hop. Far up (from the taskbar to a tab strip) each
+        // character goes its own way, slower, so it doesn't just shoot up the screen.
         void StartHop(Floor f, int w, double k)
         {
             double tx = ClampX(x, f, w), ty = f.Y;
             double d = Math.Sqrt((tx - x) * (tx - x) + (ty - footY) * (ty - footY)) / k;
-            hop = new Hop { FromX = x, FromY = footY, ToX = tx, ToY = ty, T = 0, Dur = Math.Min(0.9, 0.45 + d / 2000), To = f };
+            double rise = (footY - ty) / (k * settings.Scale);       // in sheet units, up is positive
+            string style = rise > 120 ? sprite.Climb : "hop";
+            int steps = Math.Max(2, (int)Math.Ceiling(rise / 70));
+            double dur = style switch
+            {
+                "jump" => 1.5,
+                "balloon" => Math.Clamp(rise / 280, 1.8, 3.5),
+                "fly" => Math.Clamp(rise / 380, 1.3, 2.6),
+                "steps" => steps * 0.34,
+                "poof" => 1.0,
+                _ => Math.Min(0.9, 0.45 + d / 2000),
+            };
+            hop = new Hop { FromX = x, FromY = footY, ToX = tx, ToY = ty, T = 0, Dur = dur, To = f, Style = style, Steps = steps };
             floor = null;
             voice.Want(Voice.Kind.Hop);
         }

@@ -8,6 +8,7 @@
     69
   ],
   "displayName": "새싹이",
+  "climb": "jump",
   "rows": [
     {
       "name": "idle",
@@ -37,6 +38,12 @@
       "name": "fall",
       "label": "떨어지기",
       "frames": 4,
+      "fps": 10
+    },
+    {
+      "name": "climb",
+      "label": "크게 점프",
+      "frames": 6,
       "fps": 10
     }
   ]
