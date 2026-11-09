@@ -6,11 +6,12 @@
 #   welcome  you're back after a while    a bright three-note hello
 #   dance    music started                a short happy tune
 #   sleep    dozes off (5 min no input)   a slow, quiet falling sigh
-# usage: python3 sounds.py <out dir>
-import sys, wave
+# usage: python3 tools/example-character/sounds.py characters/sounds   (the bundled ones)
+import os, sys, wave
 import numpy as np
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "."
+os.makedirs(OUT, exist_ok=True)
 SR = 44100
 PEAK = 0.32                                   # keep it quiet: well under full scale
 

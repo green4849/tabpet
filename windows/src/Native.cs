@@ -30,6 +30,9 @@ namespace TabPet
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+        [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int index);
+        public const int GWL_EXSTYLE = -20;
+        public const int WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
         [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT value, int size);
         [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int value, int size);
         [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
@@ -61,6 +64,14 @@ namespace TabPet
         {
             if (DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out r, Marshal.SizeOf(typeof(RECT))) == 0) return true;
             return GetWindowRect(hWnd, out r);
+        }
+
+        // Click-through overlays (game bars, GPU overlays, annotation tools) and floating tool
+        // windows are on top of everything but don't really cover anything.
+        public static bool IsOverlay(IntPtr hWnd)
+        {
+            int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
+            return (ex & WS_EX_TRANSPARENT) != 0 || ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_NOACTIVATE) != 0);
         }
 
         // Windows on another virtual desktop, or hidden by the system, are "cloaked".

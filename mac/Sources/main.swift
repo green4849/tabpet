@@ -1,31 +1,33 @@
-// Entry point: a menu bar icon whose menu turns the character and its voice on or
-// off. The character itself is Pet.swift.
+// Entry point: a menu bar icon whose menu turns the characters and their voice on or
+// off. Each character is a Pet (Pet.swift).
 import AppKit
-
 
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     let voice = Voice()
+    lazy var senses = Senses(voice: voice)
     var pets: [String: Pet] = [:]
+    var timer: Timer?
 
     var shown: Bool {
         get { UserDefaults.standard.object(forKey: "petShown") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "petShown"); refresh() }
+        set { UserDefaults.standard.set(newValue, forKey: "petShown"); syncPets() }
     }
     // The characters out on screen, in the order they were picked.
     var chosen: [String] {
-        get { UserDefaults.standard.stringArray(forKey: "petCharacters")
-                ?? [PET_NAME] }
-        set { UserDefaults.standard.set(newValue, forKey: "petCharacters"); refresh() }
+        get { UserDefaults.standard.stringArray(forKey: "petCharacters") ?? [PET_NAME] }
+        set { UserDefaults.standard.set(newValue, forKey: "petCharacters"); syncPets() }
     }
 
     // Start the chosen ones that aren't out yet, put away the rest.
-    func refresh() {
+    func syncPets() {
         let want = shown ? chosen : []
         for (name, pet) in pets where !want.contains(name) { pet.stop(); pets[name] = nil }
         for (i, name) in want.enumerated() where pets[name] == nil {
-            guard let pet = Pet(name, voice: voice, slot: i) else { continue }
+            guard let pet = Pet(name, voice: voice, senses: senses, slot: i) else {
+                NSLog("TabPet: could not read the sheet for %@", name); continue
+            }
             pets[name] = pet; pet.start()
         }
     }
@@ -38,7 +40,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         img?.isTemplate = true
         item.button?.image = img
         item.button?.toolTip = "TabPet"
-        refresh()
+        syncPets()
+        // What the computer is doing, and the sounds the pets want, for all of them at once.
+        timer = repeatingTimer(0.1) { [weak self] in
+            guard let self else { return }
+            let now = CACurrentMediaTime()
+            self.senses.update(now)
+            // Hidden everywhere means a full-screen app is in front: stay quiet too.
+            self.voice.flush(now: now, music: self.senses.music, away: self.senses.away,
+                             visible: self.pets.values.contains { $0.isVisible })
+        }
     }
 
     func menuNeedsUpdate(_ m: NSMenu) {

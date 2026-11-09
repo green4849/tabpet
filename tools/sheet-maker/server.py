@@ -26,7 +26,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path != "/save" or not re.fullmatch(r"[a-z0-9-]+-sheet\.(png|json)", name):
             self.send_error(400)
             return
-        size = int(self.headers.get("Content-Length", 0))
+        # only the page served from here may save (not some other site open in the browser)
+        origin = self.headers.get("Origin")
+        if origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            self.send_error(403)
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            size = 0
+        if not 0 < size <= 20_000_000:
+            self.send_error(400 if size <= 0 else 413)
+            return
         os.makedirs(OUT, exist_ok=True)
         with open(os.path.join(OUT, name), "wb") as f:
             f.write(self.rfile.read(size))

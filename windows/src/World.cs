@@ -25,10 +25,12 @@ namespace TabPet
         public bool Shown { get; set; } = true;
         public bool Sound { get; set; } = true;
         public List<string> Characters { get; set; } = new List<string> { "sprout" };
-        public double Scale { get; set; } = 0.75;           // size as a fraction of the sheet
-        public double TabStripHeight { get; set; } = 40;    // in 96-dpi units
-        public double TabStripLeft { get; set; } = 300;     // left part of the strip left free (tabs)
-        public double TabStripRight { get; set; } = 260;    // right part left free (window buttons)
+        public double Scale { get; set; } = 0.75;           // size as a fraction of the sheet (0.3–2)
+        // Chrome's tab strip, in 96-dpi units. Unlike the Mac, the window buttons are on the right,
+        // so less is left free on the left (tabs) and more on the right (minimize, maximize, close).
+        public double TabStripHeight { get; set; } = 40;
+        public double TabStripLeft { get; set; } = 300;
+        public double TabStripRight { get; set; } = 260;
 
         public static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabPet");
         static string FilePath => Path.Combine(Dir, "settings.json");
@@ -36,9 +38,23 @@ namespace TabPet
 
         public static Settings Load()
         {
-            try { if (File.Exists(FilePath)) return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Opts) ?? new Settings(); }
-            catch { }
-            return new Settings();
+            Settings s = null;
+            try { if (File.Exists(FilePath)) s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Opts); }
+            catch (Exception e) { Log($"settings.json: {e.Message}"); }
+            return (s ?? new Settings()).Checked();
+        }
+
+        // Hand-edited values out of range fall back to something that works.
+        Settings Checked()
+        {
+            var d = new Settings();
+            Scale = Scale > 0 ? Math.Clamp(Scale, 0.3, 2) : d.Scale;
+            if (TabStripHeight <= 0) TabStripHeight = d.TabStripHeight;
+            if (TabStripLeft < 0) TabStripLeft = d.TabStripLeft;
+            if (TabStripRight < 0) TabStripRight = d.TabStripRight;
+            Characters = (Characters ?? new List<string>()).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct().ToList();
+            if (Characters.Count == 0) Characters = d.Characters;
+            return this;
         }
 
         public void Save()
@@ -93,7 +109,7 @@ namespace TabPet
     // One voice for all the pets, so the spacing rules hold across them: 8 s between any two
     // sounds, 2 min between the same one, one at a time (the order below is the priority),
     // nothing while a full-screen app is in front or you're away (except dozing off, as it
-    // happens), only dance while music plays. Drop is said every time, right away.
+    // happens), only dance while music plays. Drop is said with SayNow, every time, right away.
     // Clips: poke.wav or poke-1.wav, poke-2.wav … (wav or mp3) in .tabpet\sounds or the bundled sounds.
     sealed class Voice
     {
@@ -278,28 +294,29 @@ namespace TabPet
         static string ProcessName(uint pid)
         {
             if (procNames.TryGetValue(pid, out var n)) return n;
-            try { n = Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { n = ""; }
+            try { using var p = Process.GetProcessById((int)pid); n = p.ProcessName.ToLowerInvariant(); } catch { n = ""; }
             if (procNames.Count > 500) procNames.Clear();
             procNames[pid] = n; return n;
         }
 
-        public static Result Get(double now, Settings s, HashSet<IntPtr> mine)
+        // Read at most every 30 ms however many pets ask.
+        public static Result Get(double now, Settings s)
         {
-            if (now - cachedAt < 0.08) return cached;
+            if (now - cachedAt < 0.03) return cached;
             cachedAt = now;
             var res = new Result();
             var front = new List<Rectangle>();
             uint me = (uint)Environment.ProcessId;
             Native.EnumWindows((h, _) =>
             {
-                if (mine.Contains(h) || !Native.IsWindowVisible(h) || Native.IsIconic(h) || Native.Cloaked(h)) return true;
+                if (!Native.IsWindowVisible(h) || Native.IsIconic(h) || Native.Cloaked(h)) return true;
                 Native.GetWindowThreadProcessId(h, out uint pid);
-                if (pid == me) return true;
+                if (pid == me) return true;      // the pets themselves
                 if (!Native.Bounds(h, out var r)) return true;
                 var rect = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
                 if (rect.Width <= 0 || rect.Height <= 0) return true;
                 string cls = Native.ClassName(h);
-                if (notOccluders.Contains(cls)) return true;
+                if (notOccluders.Contains(cls) || Native.IsOverlay(h)) return true;
                 if (cls == "Chrome_WidgetWin_1" && ProcessName(pid) == "chrome" && rect.Height > 150 && rect.Width > 200)
                 {
                     var top = new Point(rect.Left + rect.Width / 2, rect.Top + 1);

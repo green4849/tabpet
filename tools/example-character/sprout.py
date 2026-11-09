@@ -25,8 +25,6 @@ def ellipsoid(c, r, nlat=28, nlon=40, rot=None):
 
 def rot_z(a):
     c, s = np.cos(a), np.sin(a); return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.0]])
-def rot_x(a):
-    c, s = np.cos(a), np.sin(a); return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
 
 BODY_C, BODY_R = np.array([0, 0.27, 0]), np.array([0.25, 0.26, 0.22])
 def on_body(x, y, lift=0.0):
@@ -39,7 +37,7 @@ def on_back(x, y, sink=0.0):
     u = 1 - (x / BODY_R[0]) ** 2 - ((y - BODY_C[1]) / BODY_R[1]) ** 2
     return np.array([x, y, -BODY_R[2] * np.sqrt(max(u, 0)) + sink])
 
-# The maker's initials, written on the back of the head as a row of small beads.
+# The maker's initials, written on its back as a row of small beads.
 # Letters are drawn in a 0..0.75 x 0..1 box (u to the right, v up, as read from behind).
 LETTERS = {
     "P": [[(0, 0), (0, 1)], [(0, 1), (0.5, 1), (0.72, 0.9), (0.75, 0.75), (0.72, 0.6), (0.5, 0.5), (0, 0.5)]],

@@ -82,7 +82,11 @@ let model;
 try { model = (await new GLTFLoader().loadAsync(MODEL)).scene; }
 catch (e) { status.textContent = `모델을 읽지 못했습니다: ${MODEL} (${e.message || e})`; throw e; }
 model.rotation.y = TURN;
-if (BRIGHT !== 1) model.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.color && m.color.multiplyScalar(BRIGHT)); });
+if (BRIGHT !== 1) {
+  // meshes often share one material: brighten each material once
+  const mats = new Set(); model.traverse(o => { if (o.material) [].concat(o.material).forEach(m => mats.add(m)); });
+  mats.forEach(m => m.color && m.color.multiplyScalar(BRIGHT));
+}
 let box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
 model.scale.setScalar(Math.min(HEIGHT/size.y, 100/Math.max(size.x, size.z)));
 box = new THREE.Box3().setFromObject(model);
@@ -92,7 +96,7 @@ spin.add(model);
 const realH = box.getSize(new THREE.Vector3()).y;
 
 function pose(p) {
-  pivot.position.set(p.shift||0, BASE + (p.bob||0), 0);
+  pivot.position.set(0, BASE + (p.bob||0), 0);
   pivot.rotation.z = p.tilt||0;
   pivot.scale.set(p.sx||1, p.sy||1, p.sx||1);
   spin.rotation.y = p.spin||0;
@@ -126,12 +130,15 @@ ROWS.forEach((row, r) => {
 const meta = { cell:[CW,CH], displayPoints:[CW/2,CH/2], ...(LABEL ? { displayName: LABEL } : {}),
                rows: ROWS.map(r=>({ name:r.key, label:r.label, frames:r.n, fps:r.fps })) };
 const blob = await new Promise(res => sheet.toBlob(res, 'image/png'));
-if (SAVE) {
-  await fetch(`/save?name=${NAME}-sheet.png`, { method:'POST', body:blob });
-  await fetch(`/save?name=${NAME}-sheet.json`, { method:'POST', body:JSON.stringify(meta, null, 2) });
-}
 document.getElementById('sheet').src = URL.createObjectURL(blob);
-status.textContent = SAVE ? `저장함: tools/sheet-maker/out/${NAME}-sheet.png, ${NAME}-sheet.json → ~/.tabpet/ 로 복사하세요` : '미리보기만 (저장 안 함)';
+status.textContent = '미리보기만 (저장 안 함)';
+if (SAVE) {
+  // only tools/sheet-maker/server.py accepts these; any other server (or none) is reported, not ignored
+  const post = (name, body) => fetch(`/save?name=${name}`, { method:'POST', body }).then(r => r.ok, () => false);
+  const ok = await post(`${NAME}-sheet.png`, blob) && await post(`${NAME}-sheet.json`, JSON.stringify(meta, null, 2));
+  status.textContent = ok ? `저장함: tools/sheet-maker/out/${NAME}-sheet.png, ${NAME}-sheet.json → ~/.tabpet/ 로 복사하세요`
+                          : '저장하지 못했습니다. python3 tools/sheet-maker/server.py 로 연 페이지인지 확인하세요.';
+}
 
 const rowsEl = document.getElementById('rows');
 ROWS.forEach((row, r) => {

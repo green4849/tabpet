@@ -51,7 +51,7 @@ namespace TabPet
                     s.fps[rn] = row.GetProperty("fps").GetDouble();
                     r++;
                 }
-                if (!s.frames.TryGetValue("idle", out var idle) || idle.Count == 0 || !s.frames.TryGetValue("walk", out var walk) || walk.Count == 0) return null;
+                if (!s.Has("idle") || !s.Has("walk")) { s.Dispose(); return null; }
                 return s;
             }
             catch (Exception e) { Settings.Log($"sheet {name}: {e.Message}"); return null; }
@@ -75,7 +75,10 @@ namespace TabPet
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.CompositingQuality = CompositingQuality.HighQuality;
                 if (mirrored) { g.TranslateTransform(w, 0); g.ScaleTransform(-1, 1); }
-                g.DrawImage(frames[row][i], new Rectangle(0, 0, w, h));
+                var src = frames[row][i];
+                using var edges = new ImageAttributes();
+                edges.SetWrapMode(WrapMode.TileFlipXY);     // no faint fringe along the frame's edges
+                g.DrawImage(src, new Rectangle(0, 0, w, h), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, edges);
             }
             hb = bmp.GetHbitmap(Color.FromArgb(0));
             if (cache.Count > 400) ClearCache();
@@ -120,6 +123,14 @@ namespace TabPet
 
         protected override bool ShowWithoutActivation => true;
 
+        // Crossing to a monitor with another scale: the pet redraws itself at the new size,
+        // so don't let Windows resize the window in between.
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x02E0 /* WM_DPICHANGED */) return;
+            base.WndProc(ref m);
+        }
+
         public void Draw(IntPtr hbitmap, int x, int y, int w, int h)
         {
             IntPtr screen = Native.GetDC(IntPtr.Zero);
@@ -140,29 +151,26 @@ namespace TabPet
         }
     }
 
+    // One character on screen. Several can be out at once; they share one Voice and one Senses,
+    // which the tray app updates (Program.cs).
     sealed class Pet : IDisposable
     {
-        enum Mood { Quiet, Music, Away }
-
-        public readonly string Name;
         readonly Sprite sprite;
         readonly Settings settings;
         readonly Voice voice;
         readonly Senses senses;
-        readonly HashSet<IntPtr> petWindows;
-        readonly int slot;
         readonly Random rng = new Random();
-        PetWindow window;
-        Timer timer;
+        readonly PetWindow window = new PetWindow();
+        readonly Timer timer = new Timer { Interval = 33 };
 
         double x, footY, vy, dir = 1;      // x: left edge; footY: the line its feet are on (pixels, y down)
-        bool dragging, falling, placed, shown;
+        bool dragging, falling, shown;
         double landing;
-        Screen home;
+        Screen home;                        // whose bottom it falls to
         Floor floor;                        // what it stands on now (null: the bottom of its screen)
-        List<Floor> floors = new List<Floor>();
+        List<Floor> floors = new List<Floor>();   // tab strips wide enough for it
         double lastScan = -1;
-        IntPtr target = IntPtr.Zero, declined = IntPtr.Zero;
+        IntPtr target = IntPtr.Zero, declined = IntPtr.Zero;   // front Chrome window; one it was dragged off
         double targetSince;
         Screen targetScreen;
         sealed class Hop { public double FromX, FromY, ToX, ToY, T, Dur; public Floor To; }
@@ -171,54 +179,46 @@ namespace TabPet
         string row = "idle"; int frame; double phase;
         double last;
         Point? dragLast; bool moved;
+        bool failed;                        // logged one error already
 
-        Pet(string name, Sprite s, Settings st, Voice v, Senses se, HashSet<IntPtr> windows, int slot)
+        Pet(Sprite s, Settings st, Voice v, Senses se, int slot)
         {
-            Name = name; sprite = s; settings = st; voice = v; senses = se; petWindows = windows; this.slot = slot;
-        }
-
-        public static Pet Create(string name, Settings st, Voice v, Senses se, HashSet<IntPtr> windows, int slot)
-        {
-            var s = Sprite.Load(name);
-            return s == null ? null : new Pet(name, s, st, v, se, windows, slot);
-        }
-
-        public void Start()
-        {
-            if (window != null) return;
-            window = new PetWindow();
+            sprite = s; settings = st; voice = v; senses = se;
             window.MouseDown += (o, e) => { if (e.Button == MouseButtons.Left) { dragLast = Cursor.Position; moved = false; } };
             window.MouseMove += (o, e) => OnDrag(e);
             window.MouseUp += (o, e) => { if (e.Button == MouseButtons.Left) OnRelease(); };
-            window.Show();
-            petWindows.Add(window.Handle);
-            if (!placed)
+            home = Primary();
+            if (home != null)
             {
-                home = Screen.PrimaryScreen;
                 var wa = home.WorkingArea;
                 x = wa.Left + wa.Width * (0.3 + 0.13 * (slot % 5));
                 footY = wa.Bottom;
-                dir = slot % 2 == 0 ? 1 : -1;
-                nextRest = Clock.Now + 12;
-                placed = true;
             }
-            shown = true;
+            dir = slot % 2 == 0 ? 1 : -1;
+            nextRest = Clock.Now + 12;
             last = Clock.Now;
-            timer = new Timer { Interval = 33 };
-            timer.Tick += (o, e) => Tick();
+            window.Show(); shown = true;
+            timer.Tick += (o, e) => SafeTick();
             timer.Start();
         }
 
-        public void Stop()
+        public static Pet Create(string name, Settings st, Voice v, Senses se, int slot)
         {
-            timer?.Stop(); timer?.Dispose(); timer = null;
-            if (window != null) { petWindows.Remove(window.Handle); window.Close(); window.Dispose(); window = null; }
+            var s = Sprite.Load(name);
+            return s == null ? null : new Pet(s, st, v, se, slot);
         }
 
-        public void Dispose() { Stop(); sprite.Dispose(); }
+        public void Dispose()
+        {
+            timer.Stop(); timer.Dispose();
+            window.Close(); window.Dispose();
+            sprite.Dispose();
+        }
+
+        static Screen Primary() => Screen.PrimaryScreen ?? Screen.AllScreens.FirstOrDefault();
 
         double K => Native.ScaleAt((int)(x + 10), (int)footY - 10);     // pixels per 96-dpi unit here
-        (int w, int h) Size(double k) => ((int)Math.Round(sprite.Width * settings.Scale * k), (int)Math.Round(sprite.Height * settings.Scale * k));
+        (int w, int h) SizeAt(double k) => ((int)Math.Round(sprite.Width * settings.Scale * k), (int)Math.Round(sprite.Height * settings.Scale * k));
 
         void OnDrag(MouseEventArgs e)
         {
@@ -234,9 +234,9 @@ namespace TabPet
         {
             if (moved)
             {
-                var (w, h) = Size(K);
+                var (w, h) = SizeAt(K);
                 home = Screen.FromPoint(new Point((int)(x + w / 2.0), (int)(footY - h / 2.0)));
-                dragging = false; falling = true; vy = 0; floor = null;
+                LetGo();
                 voice.SayNow(Voice.Kind.Drop, Clock.Now);
                 // put somewhere by hand: don't hop back onto the front Chrome window until another one comes to the front
                 declined = target;
@@ -245,34 +245,46 @@ namespace TabPet
             dragLast = null; moved = false;
         }
 
+        void LetGo() { dragging = false; falling = true; vy = 0; floor = null; }
+
         static double Dist(Floor f, double cx) => cx < f.MinX ? f.MinX - cx : (cx > f.MaxX ? cx - f.MaxX : 0);
         static double ClampX(double x, Floor f, int w) => Math.Min(Math.Max(x, f.MinX), Math.Max(f.MinX, f.MaxX - w));
         static Floor ScreenFloor(Screen s) => new Floor { Window = IntPtr.Zero, Y = s.WorkingArea.Bottom, MinX = s.WorkingArea.Left, MaxX = s.WorkingArea.Right, OriginX = s.WorkingArea.Left };
 
-        Mood CurrentMood => senses.Music ? Mood.Music : senses.Away ? Mood.Away : Mood.Quiet;
+        // A bad sheet or setting shouldn't throw 30 times a second: log once and keep going.
+        void SafeTick()
+        {
+            try { Tick(); }
+            catch (Exception e) { if (!failed) { failed = true; Settings.Log($"pet: {e}"); } }
+        }
 
         void Tick()
         {
-            if (window == null) return;
             double now = Clock.Now;
             double dt = Math.Min(0.1, now - last); last = now;
-            senses.Update(now);
 
-            // A full-screen app is in front: stay out of sight and quiet.
-            if (senses.FullScreen) { if (shown) { window.Hide(); shown = false; } return; }
+            // A full-screen app is in front: stay out of sight (a drag in progress ends there).
+            if (senses.FullScreen)
+            {
+                if (shown) { window.Hide(); shown = false; }
+                if (dragging) { LetGo(); dragLast = null; moved = false; }
+                return;
+            }
             if (!shown) { window.Show(); shown = true; }
 
-            if (home == null || !Screen.AllScreens.Any(s => s.DeviceName == home.DeviceName)) home = Screen.PrimaryScreen;
+            // Screens come and go, and their work areas change (a resized taskbar): look it up again.
+            home = Screen.AllScreens.FirstOrDefault(s => home != null && s.DeviceName == home.DeviceName) ?? Primary();
+            if (home == null) return;
             double k = K;
-            var (w, h) = Size(k);
-            int feet = (int)Math.Round(4 * settings.Scale * k);   // the sheet leaves this much below the feet
+            var (w, h) = SizeAt(k);
+            int feet = (int)Math.Round(5 * settings.Scale * k);   // the sheet's floor line is 5 units above the cell's bottom
             double Mid() => x + w / 2.0;
 
-            // Look more often while standing on a window, so it keeps up when the window is dragged.
-            if (now - lastScan >= (floor != null && floor.Window != IntPtr.Zero ? 0.1 : 0.3))
+            // Look every frame while standing on a window, so it keeps up when the window is dragged.
+            if (now - lastScan >= (floor != null && floor.Window != IntPtr.Zero ? 0 : 0.3))
             {
                 lastScan = now;
-                var scan = ChromeScan.Get(now, settings, petWindows);
+                var scan = ChromeScan.Get(now, settings);
                 floors = scan.Floors.Where(f => f.MaxX - f.MinX >= w).ToList();
                 if (scan.Front != target) { target = scan.Front; targetSince = now; }
                 targetScreen = scan.FrontScreen;
@@ -295,20 +307,17 @@ namespace TabPet
                     }
                     else { floor = null; falling = true; vy = 0; }
                 }
+                // Carried to another screen with its window: that screen's bottom is now where it falls to.
+                if (floor != null && floor.Window != IntPtr.Zero) home = Screen.FromPoint(new Point((int)Mid(), floor.Y - 1));
             }
             // Go to the frontmost Chrome window once it has been in front for a moment.
             if (!dragging && !falling && hop == null && landing <= 0 && target != IntPtr.Zero && target != declined
-                && (floor == null || floor.Window != target) && now - targetSince >= 1.0)
+                && (floor == null || floor.Window != target) && now - targetSince >= 1.0 && targetScreen != null)
             {
-                var mine = floors.Where(f => f.Window == target).ToList();
-                if (mine.Count > 0 && targetScreen != null)
-                {
-                    var g = mine.OrderBy(f => Dist(f, Mid())).First();
-                    if (targetScreen.DeviceName == home.DeviceName) StartHop(g, w, k);
-                    else DropIn(g, targetScreen, w, h);
-                }
-                else if (targetScreen != null && targetScreen.DeviceName != home.DeviceName)
-                    DropIn(ScreenFloor(targetScreen), targetScreen, w, h);   // no free strip there: wait at that screen's bottom
+                var g = floors.Where(f => f.Window == target).OrderBy(f => Dist(f, Mid())).FirstOrDefault();
+                bool sameScreen = targetScreen.DeviceName == home.DeviceName;
+                if (g != null) { if (sameScreen) StartHop(g, w, k); else DropIn(g, targetScreen, w, h); }
+                else if (!sameScreen) DropIn(ScreenFloor(targetScreen), targetScreen, w, h);   // no free strip there: wait at that screen's bottom
             }
 
             var ground = ScreenFloor(home);
@@ -319,10 +328,10 @@ namespace TabPet
             if (dragging) { want = "fall"; fixedFrame = 0; }
             else if (hop != null)
             {
-                // a small jump in an arc up (or down) onto a window's tab strip
+                // a small jump in an arc up (or down) onto a tab strip
                 hop.T += dt;
                 double p = Math.Min(1, hop.T / hop.Dur);
-                double rise = Math.Min(hop.ToY, hop.FromY) - 40 * k;
+                double rise = Math.Min(hop.ToY, hop.FromY) - 40 * settings.Scale * k;
                 x = hop.FromX + (hop.ToX - hop.FromX) * p;
                 double a = hop.FromY, c = hop.ToY, b = 2 * rise - (a + c) / 2;
                 footY = a * (1 - p) * (1 - p) + 2 * b * p * (1 - p) + c * p * p;
@@ -349,26 +358,18 @@ namespace TabPet
                 landing -= dt;
                 want = "fall"; fixedFrame = landing > 0.15 ? 2 : 3;
             }
+            else if (senses.Music) want = "dance";
+            else if (senses.Away) want = "sleep";
+            else if (now < restUntil) want = "idle";
             else
             {
-                switch (CurrentMood)
+                want = "walk"; speed = 18 * Math.Max(0.7, settings.Scale);
+                if (now >= nextRest)
                 {
-                    case Mood.Music: want = "dance"; break;
-                    case Mood.Away: want = "sleep"; break;
-                    default:
-                        if (now < restUntil) want = "idle";
-                        else
-                        {
-                            want = "walk"; speed = 18 * Math.Max(0.7, settings.Scale);
-                            if (now >= nextRest)
-                            {
-                                restUntil = now + 3 + rng.NextDouble() * 5;
-                                nextRest = restUntil + 10 + rng.NextDouble() * 15;
-                            }
-                            if (rng.NextDouble() < dt * 0.05) dir = -dir;
-                        }
-                        break;
+                    restUntil = now + 3 + rng.NextDouble() * 5;
+                    nextRest = restUntil + 10 + rng.NextDouble() * 15;
                 }
+                if (rng.NextDouble() < dt * 0.05) dir = -dir;
             }
 
             x += dir * speed * k * dt;
@@ -382,16 +383,15 @@ namespace TabPet
             if (!sprite.Has(want)) want = "idle";
             if (want != row) { row = want; frame = 0; phase = 0; }
             int count = sprite.Count(row);
-            if (fixedFrame.HasValue) frame = Math.Min(fixedFrame.Value, count - 1);
+            if (fixedFrame.HasValue) frame = fixedFrame.Value;
             else
             {
                 phase += dt * sprite.Fps(row);
                 while (phase >= 1) { phase -= 1; frame++; if (frame >= count) frame = 0; }
             }
-            if (frame >= count) frame = 0;
+            frame = Math.Min(frame, count - 1);
             var hb = sprite.Frame(row, frame, row == "walk" && dir < 0, w, h);
             window.Draw(hb, (int)Math.Round(x), (int)Math.Round(footY) - h + feet, w, h);
-            voice.Flush(now, senses.Music, senses.Away, true);
         }
 
         // Jump to a floor on the same screen, landing as close to where it is as the floor allows.
@@ -408,11 +408,11 @@ namespace TabPet
         // at the same place across the width (as a fraction of the screen).
         void DropIn(Floor f, Screen to, int w, int h)
         {
-            var from = home ?? Screen.PrimaryScreen;
+            var from = home ?? to;
             double frac = (x - from.Bounds.Left) / Math.Max(1, from.Bounds.Width);
             home = to;
             x = ClampX(to.Bounds.Left + frac * to.Bounds.Width, f, w);
-            footY = f.Y - Math.Min(h * 0.8, f.Y - to.Bounds.Top);
+            footY = f.Y - h * 0.8;
             floor = null; hop = null; falling = true; vy = 0;
         }
     }

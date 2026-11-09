@@ -36,7 +36,7 @@ open ~/Applications/TabPet.app
 sh mac/login.sh on               # 로그인할 때 자동 실행 (끄기: sh mac/login.sh off)
 ```
 
-**윈도우**: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)가 필요합니다.
+**윈도우**: [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)가 필요합니다.
 
 ```powershell
 git clone https://github.com/green4849/tabpet.git
@@ -54,7 +54,7 @@ dist\TabPet\TabPet.exe
 | 평소 | 맨 앞 크롬 창의 탭 줄 빈 곳에서 천천히 걷다가 가끔 쉼. 크롬 창이 없으면 화면 아래(Dock·작업 표시줄 위) |
 | 크롬 창을 옮기거나 바꿀 때 | 창을 따라가고, 다른 창에 가려진 곳은 피하고, 창이 닫히면 떨어짐. 크롬이 다른 모니터에 있으면 그쪽으로 감 |
 | 크롬 창 위로 뛰어오를 때 | `hop` |
-| 소리가 3초 넘게 날 때 | 춤 (시작할 때 `dance` 소리 한 번). 자기 소리 뒤 3초는 무시 |
+| 소리가 3초 넘게 날 때 | 춤 (시작할 때 `dance` 소리 한 번). 소리가 2초 넘게 끊기면 멈춤. 자기 소리 뒤 3초는 무시 |
 | 키보드·마우스 입력이 5분 없을 때 | 졸기 (조는 순간 `sleep`). 돌아오면 `welcome` |
 | 클릭 | `poke` |
 | 끌었다 놓기 | 떨어지며 매번 `drop` |
@@ -109,12 +109,13 @@ TabPet의 캐릭터는 **그림 시트 한 장**(`<이름>-sheet.png` + `<이름
 
 > `tools/example-character/sprout.py`를 참고해서 내 캐릭터를 만드는 스크립트를 써 줘.
 > 생김새: (예: 하얀 찹쌀떡 같은 둥근 머리, 작은 세모 귀 두 개, 짧은 팔다리, 파란 꼬리, 까만 점 눈, 분홍 볼).
-> 발은 y=0, 앞은 +z, 머리 폭은 0.6 정도로. 부위마다 메시를 나눠 이름을 붙여 줘(head, body, armL, armR, legL, legR, tail).
+> 발은 y=0, 앞은 +z, 머리 폭은 0.6 정도로. 부위마다 메시를 나눠 이름을 붙여 줘.
 > 실행하면 `<이름>.glb`가 나오게.
 
 그려 둔 그림이 있으면 같이 보여 주세요. 얼굴처럼 세밀한 부분은 그림을 텍스처로 입히는 방식도 요청할 수 있습니다
 (직접 그린 그림일 때만 공개해도 됩니다).
 `python3 tools/sheet-maker/server.py`를 켠 뒤 `http://127.0.0.1:4660/sheet-maker/?model=../내폴더/이름.glb&save=0`으로
+(모델은 `tools/` 안의 폴더에 두세요. 그 밖의 경로는 페이지가 읽지 못합니다)
 여러 각도를 확인하면서 "옆모습이 어색해", "팔을 더 짧고 통통하게"처럼 고쳐 달라고 하면 됩니다.
 
 **B. 그림을 3D로 바꿔 주는 서비스**
@@ -165,7 +166,7 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      
 기본 시트 도구는 모델 전체를 튀기고 기울이고 돌리는 것만 합니다. 상황마다 다른 자세(책 읽기, 꼬리 덮고 자기,
 팔 벌리고 날기 등)를 원하면 AI에게 이렇게 요청하세요. 이 레포를 만들 때 실제로 이렇게 작업했습니다.
 
-1. **모델을 부위별로 나누기:** "머리·몸·팔·다리·꼬리를 따로 된 노드로 만들고, 각 노드의 `extras.pivot`에
+1. **모델을 부위별로 나누기:** (예시 새싹이는 이 단계를 하지 않았습니다) "머리·몸·팔·다리·꼬리를 따로 된 노드(head, body, armL, armR, legL, legR, tail)로 만들고, 각 노드의 `extras.pivot`에
    관절 위치(어깨, 엉덩이, 목, 꼬리 뿌리)를 넣어 줘."
 2. **상황별 참고 그림 주기:** 상황마다 원하는 모습의 그림(직접 그린 것이나 말로 설명)을 주고 어느 상황에 쓸지 정합니다.
    예: 쉬기 = 책 읽기, 걷기 = 신나서 팔 벌리기, 자리 비움 = 탁자에서 공부, 노래 = 데굴데굴 구르기, 잡기·떨어지기 = 당황.
@@ -182,7 +183,7 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      
 | 줄 순서 | `idle`(쉬기), `walk`(걷기, 오른쪽을 봄), `sleep`(자리 비움), `dance`(노래), `fall`(잡기·떨어지기). 다른 이름의 줄은 무시 |
 | 칸 배치 | 한 줄에 최대 8칸, 왼쪽부터 |
 | json | `{"cell":[128,138], "displayPoints":[64,69], "displayName":"메뉴 이름", "rows":[{"name":"idle","frames":6,"fps":6}, …]}` |
-| 발 위치 | 칸 아래에서 10px 위 (바닥선) |
+| 발 위치 | 칸 아래에서 10px 위 (바닥선, 화면에서는 5pt) |
 
 `fall` 줄은 0번째 칸이 들려 있을 때, 1번째가 떨어질 때, 2·3번째가 착지할 때 쓰입니다.
 
@@ -200,7 +201,8 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      
 | `dance` | 노래가 시작될 때 | 짧은 신나는 멜로디 |
 | `sleep` | 졸기 시작할 때 | 천천히 내려가는 작은 한숨 |
 
-예시 소리는 [`tools/example-character/sounds.py`](tools/example-character/sounds.py)가 사인파로 만든 칼림바 같은 소리입니다
+예시 소리는 [`tools/example-character/sounds.py`](tools/example-character/sounds.py)가 사인파로 만든 칼림바 같은 소리입니다.
+다시 만들려면 `python3 tools/example-character/sounds.py characters/sounds`
 (녹음·샘플 없음). 숫자를 바꿔 음높이나 길이를 고칠 수 있습니다.
 
 ## 폴더
@@ -208,7 +210,7 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      
 | 경로 | 내용 |
 |---|---|
 | `mac/` | 맥 앱 (Swift, AppKit) |
-| `windows/` | 윈도우 앱 (C#, .NET 8, Windows Forms) |
+| `windows/` | 윈도우 앱 (C#, .NET 10, Windows Forms) |
 | `.github/workflows/` | GitHub에서 두 앱을 자동으로 빌드하고, 태그를 달면 Releases에 올림 |
 | `characters/` | 앱에 함께 들어가는 예시 캐릭터와 소리 |
 | `tools/example-character/` | 예시 캐릭터 모델과 소리를 만드는 스크립트 |

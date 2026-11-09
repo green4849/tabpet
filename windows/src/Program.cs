@@ -19,6 +19,10 @@ namespace TabPet
             using var mutex = new Mutex(true, "TabPet.SingleInstance", out bool first);
             if (!first) return;
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            // Log anything unexpected instead of showing an error box over the desktop.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (o, e) => Settings.Log($"error: {e.Exception}");
+            AppDomain.CurrentDomain.UnhandledException += (o, e) => Settings.Log($"fatal: {e.ExceptionObject}");
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new TrayApp());
@@ -32,22 +36,31 @@ namespace TabPet
         readonly Voice voice;
         readonly Senses senses;
         readonly Dictionary<string, Pet> pets = new Dictionary<string, Pet>();
-        readonly HashSet<IntPtr> petWindows = new HashSet<IntPtr>();
         readonly NotifyIcon tray;
         readonly ContextMenuStrip menu = new ContextMenuStrip();
+        readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer { Interval = 100 };
 
         public TrayApp()
         {
             voice = new Voice(settings);
             senses = new Senses(voice);
             tray = new NotifyIcon { Text = "TabPet", Icon = MakeIcon(), ContextMenuStrip = menu, Visible = true };
-            menu.Opening += (o, e) => { BuildMenu(); e.Cancel = false; };
-            BuildMenu();
-            Refresh();
+            menu.Items.Add("…");              // the menu is built each time it opens
+            menu.Opening += (o, e) => BuildMenu();
+            SyncPets();
+            // What the computer is doing, and the sounds the pets want, for all of them at once.
+            timer.Tick += (o, e) =>
+            {
+                double now = Clock.Now;
+                senses.Update(now);
+                // Hidden (a full-screen app in front) or none out: stay quiet too.
+                voice.Flush(now, senses.Music, senses.Away, !senses.FullScreen && pets.Count > 0);
+            };
+            timer.Start();
         }
 
         // Start the chosen characters that aren't out yet, put away the rest.
-        void Refresh()
+        void SyncPets()
         {
             var want = settings.Shown ? settings.Characters.Where(c => Characters.DirOf(c) != null).ToList() : new List<string>();
             if (settings.Shown && want.Count == 0)
@@ -59,9 +72,9 @@ namespace TabPet
             for (int i = 0; i < want.Count; i++)
             {
                 if (pets.ContainsKey(want[i])) continue;
-                var pet = Pet.Create(want[i], settings, voice, senses, petWindows, i);
-                if (pet == null) continue;
-                pets[want[i]] = pet; pet.Start();
+                var pet = Pet.Create(want[i], settings, voice, senses, i);
+                if (pet == null) { Settings.Log($"could not read the sheet for {want[i]}"); continue; }
+                pets[want[i]] = pet;
             }
         }
 
@@ -71,7 +84,7 @@ namespace TabPet
             var all = Characters.All();
             var shown = new ToolStripMenuItem(all.Count == 0 ? $"화면 캐릭터 (그림 없음: {Characters.UserDir})" : "화면에 캐릭터 띄우기")
             { Checked = settings.Shown && all.Count > 0, Enabled = all.Count > 0 };
-            shown.Click += (o, e) => { settings.Shown = !settings.Shown; settings.Save(); Refresh(); };
+            shown.Click += (o, e) => { settings.Shown = !settings.Shown; settings.Save(); SyncPets(); };
             menu.Items.Add(shown);
 
             var sound = new ToolStripMenuItem("캐릭터 소리") { Checked = settings.Sound, Enabled = all.Count > 0 && settings.Shown };
@@ -90,7 +103,7 @@ namespace TabPet
                     {
                         var c = settings.Characters.ToList();
                         if (c.Contains(name)) { if (c.Count > 1) c.Remove(name); } else c.Add(name);
-                        settings.Characters = c; settings.Save(); Refresh();
+                        settings.Characters = c; settings.Save(); SyncPets();
                     };
                     chars.DropDownItems.Add(it);
                 }
@@ -159,6 +172,7 @@ namespace TabPet
 
         void Quit()
         {
+            timer.Stop(); timer.Dispose();
             foreach (var p in pets.Values) p.Dispose();
             pets.Clear();
             tray.Visible = false;

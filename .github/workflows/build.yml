@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
@@ -19,9 +19,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Build
-        run: dotnet publish windows/TabPet.csproj -c Release -r win-x64 -o dist/TabPet
+        shell: pwsh
+        run: |
+          # a tag like v0.2.0 sets the app's version
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.0.0' }
+          dotnet publish windows/TabPet.csproj -c Release -r win-x64 -o dist/TabPet "-p:Version=$version"
+      - name: Check the download has the app and the example character
+        shell: pwsh
+        run: |
+          foreach ($f in 'dist/TabPet/TabPet.exe', 'dist/TabPet/characters/sprout-sheet.json', 'dist/TabPet/characters/sounds/poke.wav') {
+            if (-not (Test-Path $f)) { throw "missing $f" }
+          }
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/TabPet -DestinationPath TabPet-windows.zip
@@ -36,6 +46,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: TABPET_DEST="$PWD/dist" sh mac/build.sh
+      - name: Check the download has the app and the example character
+        run: |
+          for f in dist/TabPet.app/Contents/MacOS/TabPet dist/TabPet.app/Contents/Resources/characters/sprout-sheet.json; do
+            test -e "$f" || { echo "missing $f"; exit 1; }
+          done
       - name: Zip
         run: cd dist && ditto -c -k --keepParent TabPet.app ../TabPet-mac.zip
       - uses: actions/upload-artifact@v4
@@ -47,14 +62,21 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, mac]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - name: Release
+      - name: Release (or replace the files of an existing one)
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "${{ github.ref_name }}" TabPet-windows.zip TabPet-mac.zip \
-            --repo "${{ github.repository }}" --title "TabPet ${{ github.ref_name }}" \
-            --notes "Windows: TabPet-windows.zip / Mac (Apple Silicon): TabPet-mac.zip. 설치 방법은 README를 보세요."
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" TabPet-windows.zip TabPet-mac.zip --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" TabPet-windows.zip TabPet-mac.zip --repo "$REPO" --title "TabPet $TAG" \
+              --notes "Windows: TabPet-windows.zip / Mac (Apple Silicon): TabPet-mac.zip. 설치 방법은 README를 보세요."
+          fi

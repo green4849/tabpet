@@ -1,6 +1,6 @@
-// A small character that wanders along the bottom of the screen and on top of the
-// front Chrome window, dances while music plays and dozes when you're away.
-// Click it and it squeaks; drag it and let go and it drops.
+// Small characters that walk in the front Chrome window's tab strip (or along the
+// bottom of the screen), dance while music plays and doze when you're away.
+// Click one and it plays a sound; drag it and let go and it drops.
 //
 // Characters are sprite sheets: <name>-sheet.png + <name>-sheet.json, with rows idle,
 // walk (facing right), sleep, dance, fall (other rows are ignored). They are looked for
@@ -10,18 +10,17 @@
 // use", away is "seconds since the last input event".
 import AppKit
 import CoreAudio
-import ImageIO
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser.path
 // Your own characters and sounds; the example that ships with the app is in its Resources.
 let PET_DIR = ProcessInfo.processInfo.environment["TABPET_DIR"] ?? "\(HOME)/.tabpet"
-let BUNDLED_DIR = Bundle.main.resourcePath.map { "\($0)/characters" } ?? PET_DIR
-let CHARACTER_DIRS = [PET_DIR, BUNDLED_DIR]
+let CHARACTER_DIRS = [PET_DIR] + (Bundle.main.resourcePath.map { ["\($0)/characters"] } ?? [])
 // The character out on first launch; after that the menu's choice is remembered.
 let PET_NAME = ProcessInfo.processInfo.environment["TABPET_CHARACTER"] ?? "sprout"
 
-// How big it is on screen, as a fraction of the sheet's size (0.75: about 31 pt tall,
-// about as tall as Chrome's tab strip). `defaults write io.github.green4849.tabpet petScale -float 1`
+// How big it is on screen, as a fraction of the sheet's size (0.75: a 64×69 pt cell
+// becomes 48×52 pt, the character itself about 31 pt tall, a bit less than Chrome's
+// tab strip). `defaults write io.github.green4849.tabpet petScale -float 1`
 let PET_SCALE: CGFloat = {
     let v = UserDefaults.standard.double(forKey: "petScale")
     return v > 0 ? CGFloat(min(2, max(0.3, v))) : 0.75
@@ -106,13 +105,12 @@ func soundPlaying() -> Bool {
     return running != 0
 }
 
-// Its voice: short clips in ~/.tabpet/sounds/ (or the bundled ones), `poke.m4a` or variants
-// `poke-1.m4a`, `poke-2.m4a` … picked at random. A missing clip is just skipped.
-// Kept rare: 8 s between any two sounds, 2 min between the same one, one at a time
-// (the order below is the priority), nothing while a full-screen app is in front or
-// you're away (except dozing off, as it happens), only dance while music plays.
-// `drop` is the exception: said every time it's let go, right away.
-// Follows the Mac's volume and mute.
+// One voice for all the pets: short clips in ~/.tabpet/sounds/ (or the bundled ones),
+// `poke.m4a` or variants `poke-1.m4a`, `poke-2.m4a` … picked at random; a missing clip is
+// just skipped. Kept rare: 8 s between any two sounds, 2 min between the same one, one at
+// a time (the order below is the priority), nothing while every pet is hidden (a
+// full-screen app is in front) or you're away (except dozing off, as it happens), only
+// dance while music plays. Follows the Mac's volume and mute.
 final class Voice {
     // One clip per action, in priority order.
     enum Kind: String, CaseIterable {
@@ -121,12 +119,11 @@ final class Voice {
         case dance     // music started
         case hop       // jumps up onto a window
         case sleep     // dozes off (the only one said while you're away, as it happens)
-        case drop      // let go after a drag: said every time, right away (not rate-limited)
+        case drop      // let go after a drag: said with sayNow, every time, right away
     }
 
-    var on: Bool {
-        get { UserDefaults.standard.object(forKey: "petSound") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "petSound") }
+    var on: Bool = UserDefaults.standard.object(forKey: "petSound") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(on, forKey: "petSound") }
     }
     // Until when the output device being busy is (probably) our own clip: the device
     // stays "running" for about 2.4 s after a short sound ends.
@@ -144,9 +141,9 @@ final class Voice {
             NSLog("TabPet pet voice: %@ skipped (off or no clip)", k.rawValue); return
         }
         play(k, s, url, now: now)
-        pending.removeAll()
     }
 
+    // Called a few times a second for all the pets together; plays at most one wanted clip.
     func flush(now: Double, music: Bool, away: Bool, visible: Bool) {
         defer { pending.removeAll() }
         guard on, visible, now - lastAny >= 8 else { return }
@@ -192,7 +189,8 @@ final class Voice {
 
 // Seconds since the last keyboard or mouse input.
 func secondsIdle() -> Double {
-    let kinds: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel, .leftMouseDragged]
+    let kinds: [CGEventType] = [.mouseMoved, .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                .leftMouseDragged, .rightMouseDragged, .scrollWheel]
     return kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
 }
 
@@ -211,8 +209,8 @@ func screenFloor(_ s: NSScreen) -> Floor {
 }
 
 // What the window list says about Chrome: the tab strips the pet can walk in, and
-// the frontmost Chrome window (whose screen the pet lives on, even if that window
-// leaves no room above it).
+// the frontmost Chrome window (whose screen the pet lives on, even when that window
+// has no free part of its strip).
 struct ChromeScan {
     var floors: [Floor] = []
     var front: Int? = nil
@@ -220,9 +218,9 @@ struct ChromeScan {
 }
 
 // Only window positions and the app's name are read (no titles, no screen
-// recording). It walks along the bottom of the tab strip, between the tabs on the left
-// and the buttons on the right; parts covered by windows in front don't count.
-func scanChrome(pet: NSSize) -> ChromeScan {
+// recording). The pets walk along the bottom of the tab strip, between the tabs on the
+// left and the buttons on the right; parts covered by windows in front don't count.
+func scanChrome() -> ChromeScan {
     var out = ChromeScan()
     guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
           let primaryH = NSScreen.screens.first?.frame.height else { return out }
@@ -233,8 +231,9 @@ func scanChrome(pet: NSSize) -> ChromeScan {
               let b = w[kCGWindowBounds as String] as? NSDictionary,
               let r = CGRect(dictionaryRepresentation: b) else { continue }
         let rect = CGRect(x: r.minX, y: primaryH - r.maxY, width: r.width, height: r.height)
-        if (w[kCGWindowOwnerName as String] as? String) == "Google Chrome",
-           r.height > 150, r.width > pet.width * 2,
+        // Google Chrome, and its Beta / Dev / Canary builds
+        if ((w[kCGWindowOwnerName as String] as? String) ?? "").hasPrefix("Google Chrome"),
+           r.height > 150, r.width > 200,
            let num = w[kCGWindowNumber as String] as? Int,
            let scr = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: rect.midX, y: rect.maxY - 1)) }) {
             if out.front == nil { out.front = num; out.frontScreen = scr }
@@ -249,13 +248,56 @@ func scanChrome(pet: NSSize) -> ChromeScan {
                     return [(s.0, min(s.1, o.minX)), (max(s.0, o.maxX), s.1)].filter { $0.1 > $0.0 }
                 }
             }
-            for s in segs where s.1 - s.0 >= pet.width {
+            for s in segs {
                 out.floors.append(Floor(window: num, y: floorY, minX: s.0, maxX: s.1, originX: rect.minX))
             }
         }
         front.append(rect)
     }
     return out
+}
+
+// What the computer is doing, worked out once for all the pets: music, away, and where
+// Chrome's tab strips are. The welcome, sleep and dance sounds are wanted here, once.
+final class Senses {
+    private let voice: Voice
+    private(set) var music = false
+    private(set) var away = false
+    private var soundSince: Double?
+    private var silentSince: Double?
+    private var lastCheck = -1.0
+    private var scan = ChromeScan()
+    private var scannedAt = -1.0
+
+    init(voice: Voice) { self.voice = voice }
+
+    func update(_ now: Double) {
+        guard now - lastCheck >= 1 else { return }
+        lastCheck = now
+        let wasAway = away
+        away = secondsIdle() > 5 * 60
+        if wasAway && !away { voice.want(.welcome) }
+        if !wasAway && away { voice.want(.sleep) }
+        // Its own clip (and the device winding down after it) isn't music.
+        guard now >= voice.selfUntil else { soundSince = nil; return }
+        let wasMusic = music
+        if soundPlaying() {
+            silentSince = nil
+            let since = soundSince ?? now; soundSince = since
+            if now - since >= 3 { music = true }     // not for a notification blip
+        } else {
+            soundSince = nil
+            let since = silentSince ?? now; silentSince = since
+            if now - since >= 2 { music = false }
+        }
+        if music && !wasMusic { voice.want(.dance) }
+    }
+
+    // The window list, read at most every 30 ms however many pets ask.
+    func chrome(_ now: Double) -> ChromeScan {
+        if now - scannedAt >= 0.03 { scan = scanChrome(); scannedAt = now }
+        return scan
+    }
 }
 
 // macOS keeps windows below the menu bar; in a tab strip right under it the top of the
@@ -306,30 +348,22 @@ final class PetView: NSView {
     }
 }
 
+// A timer that keeps firing while a menu is open (the default run loop mode pauses then).
+func repeatingTimer(_ interval: Double, _ body: @escaping () -> Void) -> Timer {
+    let t = Timer(timeInterval: interval, repeats: true) { _ in body() }
+    RunLoop.main.add(t, forMode: .common)
+    return t
+}
+
+// One character on screen. Several can be out at once; they share one Voice and one Senses.
 final class Pet {
-    enum Mood { case quiet, music, away }
-
-    // One character on screen. Several can be out at once; they share one voice, so the
-    // spacing rules for sounds hold across all of them.
-    let character: String
-    let sprite: Sprite
-    let voice: Voice
+    private let sprite: Sprite
+    private let voice: Voice
+    private let senses: Senses
     private let slot: Int                               // where along the bottom it first appears
-    private var placed = false
-
-    init?(_ name: String, voice: Voice, slot: Int) {
-        guard let s = Sprite(name: name) else { return nil }
-        character = name; sprite = s; self.voice = voice; self.slot = slot
-    }
     private var window: NSPanel?
     private var view: PetView?
     private var timer: Timer?
-
-    private var music = false
-    private var soundSince: Double?
-    private var silentSince: Double?
-    private var away = false
-    private var lastCheck = 0.0
 
     private var x: CGFloat = 200, y: CGFloat = 0, vy: CGFloat = 0
     private var dir: CGFloat = 1
@@ -337,7 +371,7 @@ final class Pet {
     private var landing = 0.0
     private var home = NSScreen.screens.first          // whose bottom it falls to
     private var floor: Floor? = nil                     // what it stands on now
-    private var floors: [Floor] = []                    // Chrome tops, refreshed a few times a second
+    private var floors: [Floor] = []                    // tab strips wide enough for it
     private var lastScan = 0.0
     private var target: Int? = nil, targetSince = 0.0  // the frontmost Chrome window, and since when
     private var targetScreen: NSScreen? = nil
@@ -346,12 +380,21 @@ final class Pet {
     private var restUntil = 0.0, nextRest = CACurrentMediaTime() + 12
     private var row = "idle", frame = 0, phase = 0.0
     private var last = CACurrentMediaTime()
+    private let feet: CGFloat = 5 * PET_SCALE           // the sheet's floor line is 5 pt above the cell's bottom
+
+    init?(_ name: String, voice: Voice, senses: Senses, slot: Int) {
+        guard let s = Sprite(name: name) else { return nil }
+        sprite = s; self.voice = voice; self.senses = senses; self.slot = slot
+    }
+
+    // Shown somewhere (not hidden behind a full-screen app).
+    var isVisible: Bool { window?.occlusionState.contains(.visible) ?? false }
 
     func start() {
-        let s = sprite
         guard window == nil else { return }
-        let p = PetPanel(contentRect: NSRect(origin: .zero, size: s.size),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let size = sprite.size
+        let p = PetPanel(contentRect: NSRect(origin: .zero, size: size),
+                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = false
@@ -360,7 +403,7 @@ final class Pet {
         p.isReleasedWhenClosed = false
         // All desktops, but not over full-screen apps (videos, presentations): it just isn't shown there.
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        let v = PetView(frame: NSRect(origin: .zero, size: s.size))
+        let v = PetView(frame: NSRect(origin: .zero, size: size))
         v.onClick = { [weak self] in self?.voice.want(.poke) }
         v.onDrag = { [weak self] dx, dy in
             guard let self else { return }
@@ -369,7 +412,6 @@ final class Pet {
         }
         v.onDrop = { [weak self] in
             guard let self else { return }
-            let size = self.sprite.size
             let c = CGPoint(x: self.x + size.width / 2, y: self.y + size.height / 2)
             self.home = NSScreen.screens.first(where: { $0.frame.contains(c) }) ?? NSScreen.screens.first
             self.dragging = false; self.falling = true; self.vy = 0; self.floor = nil
@@ -378,16 +420,14 @@ final class Pet {
             self.declined = self.target
         }
         p.contentView = v
-        if !placed, let vf = NSScreen.screens.first?.visibleFrame {
-            let frac = 0.3 + 0.13 * CGFloat(slot % 5)
-            x = vf.minX + vf.width * frac; y = vf.minY
+        if let vf = NSScreen.screens.first?.visibleFrame {
+            x = vf.minX + vf.width * (0.3 + 0.13 * CGFloat(slot % 5)); y = vf.minY - feet
             dir = slot % 2 == 0 ? 1 : -1
         }
-        placed = true
         window = p; view = v
         p.orderFrontRegardless()
         last = CACurrentMediaTime()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
+        timer = repeatingTimer(1.0 / 30) { [weak self] in self?.tick() }
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(self, selector: #selector(pause), name: NSWorkspace.screensDidSleepNotification, object: nil)
         ws.addObserver(self, selector: #selector(resume), name: NSWorkspace.screensDidWakeNotification, object: nil)
@@ -403,53 +443,24 @@ final class Pet {
     @objc private func resume() {
         guard window != nil, timer == nil else { return }
         last = CACurrentMediaTime()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
-    }
-
-    private var mood: Mood {
-        if music { return .music }
-        if away { return .away }
-        return .quiet
-    }
-
-    private func senses(_ now: Double) {
-        guard now - lastCheck >= 1 else { return }
-        lastCheck = now
-        let wasAway = away
-        away = secondsIdle() > 5 * 60
-        if wasAway && !away { voice.want(.welcome) }
-        if !wasAway && away { voice.want(.sleep) }
-        // Its own clip (and the device winding down after it) isn't music.
-        guard now >= voice.selfUntil else { soundSince = nil; return }
-        let wasMusic = music
-        defer { if music && !wasMusic { voice.want(.dance) } }
-        if soundPlaying() {
-            silentSince = nil
-            soundSince = soundSince ?? now
-            if now - (soundSince ?? now) >= 3 { music = true }     // not for a notification blip
-        } else {
-            soundSince = nil
-            silentSince = silentSince ?? now
-            if now - (silentSince ?? now) >= 2 { music = false }
-        }
+        timer = repeatingTimer(1.0 / 30) { [weak self] in self?.tick() }
     }
 
     private func tick() {
         guard let w = window, let v = view else { return }
-        let s = sprite
+        let size = sprite.size
         let now = CACurrentMediaTime()
         let dt = min(0.1, now - last); last = now
-        senses(now)
 
         if home == nil || !NSScreen.screens.contains(where: { $0 == home }) { home = NSScreen.screens.first }
         guard let screen = home else { return }
-        let mid = { self.x + s.size.width / 2 }
+        let mid = { self.x + size.width / 2 }
 
-        // Look more often while standing on a window, so it keeps up when the window is dragged.
-        if now - lastScan >= (floor?.window != nil ? 0.1 : 0.3) {
+        // Look every frame while standing on a window, so it keeps up when the window is dragged.
+        if now - lastScan >= (floor?.window != nil ? 0 : 0.3) {
             lastScan = now
-            let scan = scanChrome(pet: s.size)
-            floors = scan.floors
+            let scan = senses.chrome(now)
+            floors = scan.floors.filter { $0.maxX - $0.minX >= size.width }
             if scan.front != target { target = scan.front; targetSince = now }
             targetScreen = scan.frontScreen
             if target != declined && declined != nil && target != nil { declined = nil }
@@ -461,34 +472,37 @@ final class Pet {
                     x += any.originX - f.originX
                     if let g = mine.first(where: { mid() >= $0.minX && mid() <= $0.maxX }) { floor = g }
                     else if let g = mine.min(by: { dist($0, mid()) < dist($1, mid()) }) {
-                        if dist(g, mid()) <= s.size.width { floor = g; x = clampX(x, on: g, s.size.width) }
-                        else { startHop(to: g, size: s.size, now: now) }
+                        if dist(g, mid()) <= size.width { floor = g; x = clampX(x, on: g, size.width) }
+                        else { startHop(to: g, size: size) }
                     }
                 } else { floor = nil; falling = true; vy = 0 }
             }
+            // Carried to another screen with its window: that screen's bottom is now where it falls to.
+            if let f = floor, f.window != nil,
+               let s = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: mid(), y: f.y + 1)) }) { home = s }
         }
         // Go to the frontmost Chrome window once it has been in front for a moment.
         if !dragging, !falling, hop == nil, landing <= 0, let id = target, id != declined,
            floor?.window != id, now - targetSince >= 1.0 {
             let mine = floors.filter { $0.window == id }
             if let g = mine.min(by: { dist($0, mid()) < dist($1, mid()) }), let scr = targetScreen {
-                if scr == screen { startHop(to: g, size: s.size, now: now) }
-                else { dropIn(on: g, from: screen, to: scr, size: s.size) }
+                if scr == screen { startHop(to: g, size: size) }
+                else { dropIn(on: g, from: screen, to: scr, size: size) }
             } else if let scr = targetScreen, scr != screen {
                 // No free part of its tab strip: wait at the bottom of that screen instead.
-                dropIn(on: screenFloor(scr), from: screen, to: scr, size: s.size)
+                dropIn(on: screenFloor(scr), from: screen, to: scr, size: size)
             }
         }
         let ground = screenFloor(home ?? screen)
         let here = floor ?? hop?.floor ?? ground
-        let minX = here.minX, maxX = here.maxX - s.size.width
+        let minX = here.minX, maxX = here.maxX - size.width
         var want = "idle", speed: CGFloat = 0
         var fixed: Int? = nil
 
         if dragging {
             want = "fall"; fixed = 0
         } else if var h = hop {
-            // A small jump in an arc up (or down) to a window's top edge.
+            // A small jump in an arc up (or down) onto a tab strip.
             h.t += dt; hop = h
             let p = CGFloat(min(1, h.t / h.dur))
             let rise = max(h.to.y, h.from.y) + 40 * PET_SCALE
@@ -503,7 +517,7 @@ final class Pet {
             let before = y
             vy -= 2200 * dt; y += vy * dt
             want = "fall"; fixed = vy > -200 ? 0 : 1
-            // Land on the first Chrome top it passes through, else on the screen bottom.
+            // Land on the first tab strip it passes through, else on the screen bottom.
             let hit = floors.filter { before >= $0.y - feet - 1 && y <= $0.y - feet && mid() >= $0.minX && mid() <= $0.maxX }
                 .max(by: { $0.y < $1.y })
             if let f = hit {
@@ -514,23 +528,19 @@ final class Pet {
         } else if landing > 0 {
             landing -= dt
             want = "fall"; fixed = landing > 0.15 ? 2 : 3
+        } else if senses.music {
+            want = "dance"
+        } else if senses.away {
+            want = "sleep"
+        } else if now < restUntil {
+            want = "idle"
         } else {
-            switch mood {
-            case .music:
-                want = "dance"
-            case .away:
-                want = "sleep"
-            case .quiet:
-                if now < restUntil { want = "idle" }
-                else {
-                    want = "walk"; speed = 18 * max(0.7, PET_SCALE)
-                    if now >= nextRest {
-                        restUntil = now + Double.random(in: 3...8)
-                        nextRest = restUntil + Double.random(in: 10...25)
-                    }
-                    if Double.random(in: 0..<1) < dt * 0.05 { dir *= -1 }
-                }
+            want = "walk"; speed = 18 * max(0.7, PET_SCALE)
+            if now >= nextRest {
+                restUntil = now + Double.random(in: 3...8)
+                nextRest = restUntil + Double.random(in: 10...25)
             }
+            if Double.random(in: 0..<1) < dt * 0.05 { dir *= -1 }
         }
 
         x += dir * speed * CGFloat(dt)
@@ -540,25 +550,21 @@ final class Pet {
         }
         if !dragging && !falling && hop == nil { y = (floor ?? ground).y - feet }
 
-        guard let frames = s.frames[want] ?? s.frames["idle"], !frames.isEmpty else { return }
+        guard let frames = sprite.frames[want] ?? sprite.frames["idle"], !frames.isEmpty else { return }
         if want != row { row = want; frame = 0; phase = 0 }
         if let f = fixed {
             frame = min(f, frames.count - 1)
         } else {
-            let fps = s.fps[want] ?? 8
-            phase += dt * fps
+            phase += dt * (sprite.fps[want] ?? 8)
             while phase >= 1 {
                 phase -= 1; frame += 1
                 if frame >= frames.count { frame = 0 }
             }
         }
+        frame = min(frame, frames.count - 1)
         v.show(frames[frame], mirrored: want == "walk" && dir < 0)
         w.setFrameOrigin(NSPoint(x: x, y: y))
-        // Not shown means a full-screen app is in front: stay quiet there too.
-        voice.flush(now: now, music: music, away: away, visible: w.occlusionState.contains(.visible))
     }
-
-    private let feet: CGFloat = 4 * PET_SCALE  // the sheet leaves this much below the feet
 
     // How far a pet centred at `cx` is from standing on `f` (0 when it's over it).
     private func dist(_ f: Floor, _ cx: CGFloat) -> CGFloat {
@@ -570,7 +576,7 @@ final class Pet {
     }
 
     // Jump to a floor on the same screen: land as close to where it is as the floor allows.
-    private func startHop(to f: Floor, size: NSSize, now: Double) {
+    private func startHop(to f: Floor, size: NSSize) {
         voice.want(.hop)
         let to = NSPoint(x: clampX(x, on: f, size.width), y: f.y - feet)
         let d = hypot(to.x - x, to.y - y)
@@ -578,13 +584,14 @@ final class Pet {
         floor = nil
     }
 
-    // On another screen: appear just above the floor there and drop onto it.
-    // Keeps the same place across the width, as a fraction of the screen.
+    // On another screen: appear just above the floor there and drop onto it, at the same
+    // place across the width (as a fraction of the screen). The panel may sit partly above
+    // the menu bar (PetPanel doesn't constrain it), so a strip right under it still works.
     private func dropIn(on f: Floor, from: NSScreen, to screen: NSScreen, size: NSSize) {
         let frac = (x - from.frame.minX) / max(1, from.frame.width)
         home = screen
         x = clampX(screen.frame.minX + frac * screen.frame.width, on: f, size.width)
-        y = min(f.y + size.height * 0.8, screen.visibleFrame.maxY - size.height)
+        y = f.y + size.height * 0.8
         floor = nil; hop = nil; falling = true; vy = 0
     }
 }
