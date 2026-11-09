@@ -201,9 +201,8 @@ mkdir -p ~/.tabpet && cp tools/sheet-maker/out/<이름>-sheet.* ~/.tabpet/      
 | `dance` | 노래가 시작될 때 | 짧은 신나는 멜로디 |
 | `sleep` | 졸기 시작할 때 | 천천히 내려가는 작은 한숨 |
 
-예시 소리는 [`tools/example-character/sounds.py`](tools/example-character/sounds.py)가 사인파로 만든 칼림바 같은 소리입니다.
-다시 만들려면 `python3 tools/example-character/sounds.py characters/sounds`
-(녹음·샘플 없음). 숫자를 바꿔 음높이나 길이를 고칠 수 있습니다.
+예시 소리는 [`tools/example-character/sounds.py`](tools/example-character/sounds.py)가 사인파로 만든 칼림바 같은 소리입니다
+(녹음·샘플 없음). 숫자를 바꿔 음높이나 길이를 고친 뒤 `python3 tools/example-character/sounds.py characters/sounds`로 다시 만듭니다.
 
 ## 폴더
 
