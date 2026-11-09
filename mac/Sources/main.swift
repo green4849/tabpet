@@ -22,6 +22,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Start the chosen ones that aren't out yet, put away the rest.
     func syncPets() {
+        defer { updateIcon() }
         let want = shown ? chosen : []
         for (name, pet) in pets where !want.contains(name) { pet.stop(); pets[name] = nil }
         for (i, name) in want.enumerated() where pets[name] == nil {
@@ -36,9 +37,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         menu.autoenablesItems = false
         item.menu = menu
-        let img = NSImage(systemSymbolName: "pawprint", accessibilityDescription: "TabPet")
-        img?.isTemplate = true
-        item.button?.image = img
         item.button?.toolTip = "TabPet"
         syncPets()
         // What the computer is doing, and the sounds the pets want, for all of them at once.
@@ -50,6 +48,43 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.voice.flush(now: now, music: self.senses.music, away: self.senses.away,
                              visible: self.pets.values.contains { $0.isVisible })
         }
+    }
+
+    // The menu bar icon: the face of the first character picked, in colour, from its first
+    // idle frame (the part of the picture from the top of its head down, as a square).
+    // A paw print when no sheet can be read.
+    func updateIcon() {
+        if let name = chosen.first(where: { characterDir($0) != nil }),
+           let frame = Sprite(name: name)?.frames["idle"]?.first, let face = faceCrop(frame) {
+            let img = NSImage(cgImage: face, size: NSSize(width: 18, height: 18))
+            img.isTemplate = false
+            item.button?.image = img
+        } else {
+            let img = NSImage(systemSymbolName: "pawprint", accessibilityDescription: "TabPet")
+            img?.isTemplate = true
+            item.button?.image = img
+        }
+    }
+
+    // The square from the top of the character down, as wide as it is (taller for long ears).
+    func faceCrop(_ img: CGImage) -> CGImage? {
+        let w = img.width, h = img.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = ctx.data else { return nil }
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var minX = w, maxX = -1, minY = h, maxY = -1      // rows from the top
+        for row in 0..<h {
+            for x in 0..<w where px[(row * w + x) * 4 + 3] > 40 {
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, row); maxY = max(maxY, row)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let bw = Double(maxX - minX + 1), bh = Double(maxY - minY + 1)
+        let side = max(bw, 0.68 * bh), cx = Double(minX + maxX + 1) / 2
+        // the image's own rows also run from the top
+        return img.cropping(to: CGRect(x: cx - side / 2, y: Double(minY), width: side, height: side).integral)
     }
 
     func menuNeedsUpdate(_ m: NSMenu) {
@@ -75,7 +110,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 i.isEnabled = !(picked == [name])
                 sub.addItem(i)
             }
-            let chars = NSMenuItem(title: "캐릭터 (여러 개 고를 수 있음)", action: nil, keyEquivalent: "")
+            let chars = NSMenuItem(title: "캐릭터 추가", action: nil, keyEquivalent: "")
             chars.submenu = sub
             m.addItem(chars)
         }

@@ -44,7 +44,7 @@ namespace TabPet
         {
             voice = new Voice(settings);
             senses = new Senses(voice);
-            tray = new NotifyIcon { Text = "TabPet", Icon = MakeIcon(), ContextMenuStrip = menu, Visible = true };
+            tray = new NotifyIcon { Text = "TabPet", ContextMenuStrip = menu, Visible = true };
             menu.Items.Add("…");              // the menu is built each time it opens
             menu.Opening += (o, e) => BuildMenu();
             SyncPets();
@@ -76,6 +76,7 @@ namespace TabPet
                 if (pet == null) { Settings.Log($"could not read the sheet for {want[i]}"); continue; }
                 pets[want[i]] = pet;
             }
+            UpdateIcon();
         }
 
         void BuildMenu()
@@ -94,7 +95,7 @@ namespace TabPet
             if (all.Count > 1)
             {
                 // Tick as many as you like; at least one stays.
-                var chars = new ToolStripMenuItem("캐릭터 (여러 개 고를 수 있음)");
+                var chars = new ToolStripMenuItem("캐릭터 추가");
                 foreach (var name in all)
                 {
                     bool on = settings.Characters.Contains(name);
@@ -141,33 +142,48 @@ namespace TabPet
             else key.DeleteValue("TabPet", false);
         }
 
-        // The tray icon: the first frame of the first character, or a plain one.
-        Icon MakeIcon()
+        // The tray icon: the face of the first character picked, in colour, from its first idle
+        // frame (the part of the picture from the top of its head down, as a square).
+        string iconFor;
+        void UpdateIcon()
+        {
+            var name = settings.Characters.FirstOrDefault(c => Characters.DirOf(c) != null) ?? Characters.All().FirstOrDefault();
+            if (name == iconFor && tray.Icon != null) return;
+            iconFor = name;
+            var old = tray.Icon;
+            tray.Icon = FaceIcon(name) ?? SystemIcons.Application;
+            if (old != null && old != SystemIcons.Application) old.Dispose();
+        }
+
+        static Icon FaceIcon(string name)
         {
             try
             {
-                var name = settings.Characters.FirstOrDefault(c => Characters.DirOf(c) != null) ?? Characters.All().FirstOrDefault();
                 using var s = name == null ? null : Sprite.Load(name);
-                if (s != null)
+                if (s == null) return null;
+                var src = s.First("idle");
+                // the character's outline: everything not (nearly) transparent
+                int minX = src.Width, maxX = -1, minY = src.Height, maxY = -1;
+                for (int y = 0; y < src.Height; y++)
+                    for (int x = 0; x < src.Width; x++)
+                        if (src.GetPixel(x, y).A > 40) { minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+                if (maxX < minX) return null;
+                // as wide as the character, taller for long ears
+                double side = Math.Max(maxX - minX + 1, 0.68 * (maxY - minY + 1)), cx = (minX + maxX + 1) / 2.0;
+                var from = new RectangleF((float)(cx - side / 2), minY, (float)side, (float)side);
+                using var bmp = new Bitmap(32, 32);
+                using (var g = Graphics.FromImage(bmp))
                 {
-                    using var bmp = new Bitmap(32, 32);
-                    using (var g = Graphics.FromImage(bmp))
-                    {
-                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                        var src = s.First("idle");
-                        // crop to the character: the middle of the cell, a little above the bottom
-                        int side = (int)(src.Width * 0.75);
-                        var from = new Rectangle((src.Width - side) / 2, src.Height - side - (int)(src.Height * 0.04), side, side);
-                        g.DrawImage(src, new Rectangle(0, 0, 32, 32), from, GraphicsUnit.Pixel);
-                    }
-                    IntPtr hIcon = bmp.GetHicon();
-                    var icon = (Icon)Icon.FromHandle(hIcon).Clone();
-                    Native.DestroyIcon(hIcon);
-                    return icon;
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    g.DrawImage(src, new RectangleF(0, 0, 32, 32), from, GraphicsUnit.Pixel);
                 }
+                IntPtr hIcon = bmp.GetHicon();
+                var icon = (Icon)Icon.FromHandle(hIcon).Clone();
+                Native.DestroyIcon(hIcon);
+                return icon;
             }
-            catch { }
-            return SystemIcons.Application;
+            catch (Exception e) { Settings.Log($"icon: {e.Message}"); return null; }
         }
 
         void Quit()
