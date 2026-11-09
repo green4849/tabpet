@@ -109,13 +109,19 @@ func soundPlaying() -> Bool {
 // Its voice: short clips in ~/.tabpet/sounds/ (or the bundled ones), `poke.m4a` or variants
 // `poke-1.m4a`, `poke-2.m4a` … picked at random. A missing clip is just skipped.
 // Kept rare: 8 s between any two sounds, 2 min between the same one, one at a time
-// (the order below is the priority), nothing while you're away or a full-screen app
-// is in front, only dance while music plays (said as the music starts).
+// (the order below is the priority), nothing while a full-screen app is in front or
+// you're away (except dozing off, as it happens), only dance while music plays.
 // `drop` is the exception: said every time it's let go, right away.
 // Follows the Mac's volume and mute.
 final class Voice {
-    enum Kind: String, CaseIterable { case welcome, poke, dance
-        case drop   // let go after a drag: said every time, right away (not rate-limited)
+    // One clip per action, in priority order.
+    enum Kind: String, CaseIterable {
+        case welcome   // you're back after a while
+        case poke      // clicked
+        case dance     // music started
+        case hop       // jumps up onto a window
+        case sleep     // dozes off (the only one said while you're away, as it happens)
+        case drop      // let go after a drag: said every time, right away (not rate-limited)
     }
 
     var on: Bool {
@@ -143,8 +149,9 @@ final class Voice {
 
     func flush(now: Double, music: Bool, away: Bool, visible: Bool) {
         defer { pending.removeAll() }
-        guard on, !away, visible, now - lastAny >= 8 else { return }
+        guard on, visible, now - lastAny >= 8 else { return }
         for k in Kind.allCases where pending.contains(k) {
+            if away && k != .sleep { continue }
             if music && k != .dance { continue }
             if now - (lastKind[k] ?? -1e9) < 120 { continue }
             guard let url = clip(k), let s = NSSound(contentsOf: url, byReference: true) else { continue }
@@ -411,6 +418,7 @@ final class Pet {
         let wasAway = away
         away = secondsIdle() > 5 * 60
         if wasAway && !away { voice.want(.welcome) }
+        if !wasAway && away { voice.want(.sleep) }
         // Its own clip (and the device winding down after it) isn't music.
         guard now >= voice.selfUntil else { soundSince = nil; return }
         let wasMusic = music
@@ -563,6 +571,7 @@ final class Pet {
 
     // Jump to a floor on the same screen: land as close to where it is as the floor allows.
     private func startHop(to f: Floor, size: NSSize, now: Double) {
+        voice.want(.hop)
         let to = NSPoint(x: clampX(x, on: f, size.width), y: f.y - feet)
         let d = hypot(to.x - x, to.y - y)
         hop = (from: NSPoint(x: x, y: y), to: to, t: 0, dur: min(0.9, 0.45 + Double(d) / 2000), floor: f)
