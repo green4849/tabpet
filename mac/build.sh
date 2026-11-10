@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 OUT="${TABPET_DEST:-$HOME/Applications}/TabPet.app"
 mkdir -p build
-swiftc -O -swift-version 5 -target arm64-apple-macos14.0 -framework CoreAudio Sources/Pet.swift Sources/main.swift -o build/TabPet
+swiftc -O -swift-version 5 -target arm64-apple-macos14.0 -framework CoreAudio Sources/Pet.swift Sources/Todo.swift Sources/main.swift -o build/TabPet
 # quit a running copy first, or the new one would see it and exit at once
 pkill -x TabPet 2>/dev/null || true
 rm -rf "$OUT"

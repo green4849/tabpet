@@ -56,7 +56,7 @@ func characterDir(_ name: String) -> String? {
 }
 
 struct PetRow: Decodable { let name: String; let frames: Int; let fps: Double }
-struct PetSheet: Decodable { let cell: [Int]; let displayPoints: [Double]; let rows: [PetRow]; let displayName: String?; let climb: String? }
+struct PetSheet: Decodable { let cell: [Int]; let displayPoints: [Double]; let rows: [PetRow]; let displayName: String?; let climb: String?; let color: String? }
 
 // How a character gets up to a Chrome tab strip far above it (see Pet.startHop), from the
 // sheet's "climb": jump (crouch and leap, using a "climb" row if there is one), balloon or
@@ -76,6 +76,7 @@ final class Sprite {
     let fps: [String: Double]
     let size: NSSize
     let climb: String
+    let color: NSColor?      // the sheet's "color" ("#rrggbb"): what its checklist is drawn in
 
     init?(name: String) {
         guard let dir = characterDir(name) else { return nil }
@@ -94,6 +95,9 @@ final class Sprite {
         guard f["idle"]?.isEmpty == false, f["walk"]?.isEmpty == false else { return nil }
         frames = f; fps = r
         climb = CLIMB_STYLES.contains(sheet.climb ?? "") ? sheet.climb! : "poof"
+        if let hex = sheet.color?.trimmingCharacters(in: CharacterSet(charactersIn: "#")), hex.count == 6, let v = UInt32(hex, radix: 16) {
+            color = NSColor(srgbRed: CGFloat(v >> 16 & 0xff) / 255, green: CGFloat(v >> 8 & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
+        } else { color = nil }
         size = NSSize(width: sheet.displayPoints[0] * PET_SCALE, height: sheet.displayPoints[1] * PET_SCALE)
     }
 }
@@ -375,6 +379,14 @@ final class Pet {
     private var view: PetView?
     private var timer: Timer?
 
+    // A plain click (the checklist opens over it), and where it is while that's open.
+    var onTap: ((Pet) -> Void)?
+    var onMove: ((Pet, NSRect) -> Void)?
+    var screenRect: NSRect? { window?.frame }
+    var accent: NSColor? { sprite.color }
+    // Held while its checklist is open: it stands still and doesn't go off to a Chrome window.
+    var held = false
+
     private var x: CGFloat = 200, y: CGFloat = 0, vy: CGFloat = 0
     private var dir: CGFloat = 1
     private var dragging = false, falling = false
@@ -415,7 +427,10 @@ final class Pet {
         // All desktops, but not over full-screen apps (videos, presentations): it just isn't shown there.
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         let v = PetView(frame: NSRect(origin: .zero, size: size))
-        v.onClick = { [weak self] in self?.voice.want(.poke) }
+        v.onClick = { [weak self] in
+            guard let self else { return }
+            self.voice.want(.poke); self.onTap?(self)
+        }
         v.onDrag = { [weak self] dx, dy in
             guard let self else { return }
             self.dragging = true; self.falling = false; self.hop = nil
@@ -493,7 +508,7 @@ final class Pet {
                let s = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: mid(), y: f.y + 1)) }) { home = s }
         }
         // Go to the frontmost Chrome window once it has been in front for a moment.
-        if !dragging, !falling, hop == nil, landing <= 0, let id = target, id != declined,
+        if !dragging, !falling, hop == nil, landing <= 0, !held, let id = target, id != declined,
            floor?.window != id, now - targetSince >= 1.0 {
             let mine = floors.filter { $0.window == id }
             if let g = mine.min(by: { dist($0, mid()) < dist($1, mid()) }), let scr = targetScreen {
@@ -588,6 +603,8 @@ final class Pet {
         } else if landing > 0 {
             landing -= dt
             want = "fall"; fixed = landing > 0.15 ? 2 : 3
+        } else if held {
+            want = "idle"
         } else if senses.music {
             want = "dance"
         } else if senses.away {
@@ -624,7 +641,10 @@ final class Pet {
         frame = min(frame, frames.count - 1)
         v.show(frames[frame], mirrored: want == "walk" && dir < 0, scale: scale)
         if w.alphaValue != alpha { w.alphaValue = alpha }
-        w.setFrameOrigin(NSPoint(x: x, y: y))
+        if w.frame.origin != NSPoint(x: x, y: y) {
+            w.setFrameOrigin(NSPoint(x: x, y: y))
+            if held { onMove?(self, w.frame) }
+        }
     }
 
     // How far a pet centred at `cx` is from standing on `f` (0 when it's over it).

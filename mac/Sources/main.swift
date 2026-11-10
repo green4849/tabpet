@@ -7,6 +7,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     let voice = Voice()
     lazy var senses = Senses(voice: voice)
+    let checklist = Checklist()
     var pets: [String: Pet] = [:]
     var timer: Timer?
 
@@ -24,11 +25,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func syncPets() {
         defer { updateIcon() }
         let want = shown ? chosen : []
-        for (name, pet) in pets where !want.contains(name) { pet.stop(); pets[name] = nil }
+        for (name, pet) in pets where !want.contains(name) { checklist.petGone(pet); pet.stop(); pets[name] = nil }
         for (i, name) in want.enumerated() where pets[name] == nil {
             guard let pet = Pet(name, voice: voice, senses: senses, slot: i) else {
                 NSLog("TabPet: could not read the sheet for %@", name); continue
             }
+            pet.onTap = { [weak self] p in self?.checklist.toggle(p) }
+            pet.onMove = { [weak self] p, r in self?.checklist.petMoved(p, to: r) }
             pets[name] = pet; pet.start()
         }
     }
@@ -89,6 +92,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ m: NSMenu) {
         m.removeAllItems()
+        m.addItem(action("체크리스트", #selector(openChecklist)))
+        m.addItem(.separator())
         let list = petCharacters()
         let petItem = action(list.isEmpty ? "화면 캐릭터 (그림 없음: \(PET_DIR))" : "화면에 캐릭터 띄우기", #selector(togglePet))
         petItem.state = shown && !list.isEmpty ? .on : .off
@@ -129,6 +134,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         chosen = c
     }
     @objc func togglePet() { shown.toggle() }
+    // Over the first character out on screen; under the menu bar icon when none is.
+    @objc func openChecklist() {
+        if let p = chosen.compactMap({ pets[$0] }).first, let r = p.screenRect { checklist.open(at: r, pet: p) }
+        else if let r = item.button?.window?.frame { checklist.open(at: r, pet: nil) }
+    }
+    func applicationWillTerminate(_ n: Notification) { checklist.store.flush() }
     @objc func togglePetSound() { voice.on.toggle() }
     @objc func quit() { NSApp.terminate(nil) }
 }
