@@ -30,6 +30,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let pet = Pet(name, voice: voice, senses: senses, slot: i) else {
                 NSLog("TabPet: could not read the sheet for %@", name); continue
             }
+            pet.contextMenu = { [weak self] in self?.petMenu() ?? NSMenu() }
             pet.onTap = { [weak self] p in self?.checklist.toggle(p) }
             pet.onMove = { [weak self] p, r in self?.checklist.petMoved(p, to: r) }
             pets[name] = pet; pet.start()
@@ -57,6 +58,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // idle frame (the part of the picture from the top of its head down, as a square).
     // A paw print when no sheet can be read.
     func updateIcon() {
+        // Sound off: the icon is a little faded, nothing more on screen.
+        item.button?.alphaValue = voice.on ? 1 : 0.45
+        item.button?.toolTip = voice.on ? "TabPet" : "TabPet (소리 꺼짐)"
         if let name = chosen.first(where: { characterDir($0) != nil }),
            let frame = Sprite(name: name)?.frames["idle"]?.first, let face = faceCrop(frame) {
             let img = NSImage(cgImage: face, size: NSSize(width: 18, height: 18))
@@ -140,7 +144,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else if let r = item.button?.window?.frame { checklist.open(at: r, pet: nil) }
     }
     func applicationWillTerminate(_ n: Notification) { checklist.store.flush() }
-    @objc func togglePetSound() { voice.on.toggle() }
+    @objc func togglePetSound() { voice.on.toggle(); updateIcon() }
+
+    // Right-click on a character: the quick way to hush it (and turn it back on).
+    func petMenu() -> NSMenu {
+        let m = NSMenu()
+        m.autoenablesItems = false
+        m.addItem(action(voice.on ? "소리 끄기" : "소리 켜기", #selector(togglePetSound)))
+        return m
+    }
     @objc func quit() { NSApp.terminate(nil) }
 }
 

@@ -135,7 +135,10 @@ final class Voice {
     }
 
     var on: Bool = UserDefaults.standard.object(forKey: "petSound") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(on, forKey: "petSound") }
+        didSet {
+            UserDefaults.standard.set(on, forKey: "petSound")
+            if !on { player?.stop(); pending.removeAll() }   // hush at once, not after the clip
+        }
     }
     // Until when the output device being busy is (probably) our own clip: the device
     // stays "running" for about 2.4 s after a short sound ends.
@@ -323,6 +326,7 @@ final class PetView: NSView {
     var onClick: () -> Void = {}
     var onDrag: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onDrop: () -> Void = {}
+    var onMenu: (NSEvent) -> Void = { _ in }          // right-click or control-click
     private var last: NSPoint?
     private var moved = false
 
@@ -338,7 +342,11 @@ final class PetView: NSView {
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func mouseDown(with e: NSEvent) { last = NSEvent.mouseLocation; moved = false }
+    override func mouseDown(with e: NSEvent) {
+        if e.modifierFlags.contains(.control) { last = nil; onMenu(e); return }
+        last = NSEvent.mouseLocation; moved = false
+    }
+    override func rightMouseDown(with e: NSEvent) { onMenu(e) }
     override func mouseDragged(with e: NSEvent) {
         guard let l = last else { return }
         let p = NSEvent.mouseLocation
@@ -348,6 +356,7 @@ final class PetView: NSView {
         last = p
     }
     override func mouseUp(with e: NSEvent) {
+        guard last != nil else { return }
         if moved { onDrop() } else { onClick() }
         last = nil
     }
@@ -379,6 +388,8 @@ final class Pet {
     private var view: PetView?
     private var timer: Timer?
 
+    // The small menu shown on right-click (the app builds it, so it matches the menu bar menu).
+    var contextMenu: (() -> NSMenu)?
     // A plain click (the checklist opens over it), and where it is while that's open.
     var onTap: ((Pet) -> Void)?
     var onMove: ((Pet, NSRect) -> Void)?
@@ -430,6 +441,10 @@ final class Pet {
         v.onClick = { [weak self] in
             guard let self else { return }
             self.voice.want(.poke); self.onTap?(self)
+        }
+        v.onMenu = { [weak self, weak v] e in
+            guard let v, let m = self?.contextMenu?() else { return }
+            NSMenu.popUpContextMenu(m, with: e, for: v)
         }
         v.onDrag = { [weak self] dx, dy in
             guard let self else { return }
