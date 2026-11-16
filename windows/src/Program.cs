@@ -39,11 +39,13 @@ namespace TabPet
         readonly NotifyIcon tray;
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer { Interval = 100 };
+        readonly Checklist checklist;
 
         public TrayApp()
         {
             voice = new Voice(settings);
             senses = new Senses(voice);
+            checklist = new Checklist();
             tray = new NotifyIcon { Text = "TabPet", ContextMenuStrip = menu, Visible = true };
             menu.Items.Add("…");              // the menu is built each time it opens
             menu.Opening += (o, e) => BuildMenu();
@@ -68,12 +70,15 @@ namespace TabPet
                 var all = Characters.All();
                 if (all.Count > 0) { want.Add(all[0]); settings.Characters = new List<string> { all[0] }; settings.Save(); }
             }
-            foreach (var name in pets.Keys.ToList().Where(n => !want.Contains(n))) { pets[name].Dispose(); pets.Remove(name); }
+            foreach (var name in pets.Keys.ToList().Where(n => !want.Contains(n))) { checklist.PetGone(pets[name]); pets[name].Dispose(); pets.Remove(name); }
             for (int i = 0; i < want.Count; i++)
             {
                 if (pets.ContainsKey(want[i])) continue;
                 var pet = Pet.Create(want[i], settings, voice, senses, i);
                 if (pet == null) { Settings.Log($"could not read the sheet for {want[i]}"); continue; }
+                pet.Tapped = p => checklist.Toggle(p);
+                pet.Moved = (p, r) => checklist.PetMoved(p, r);
+                pet.Menu = PetMenu;
                 pets[want[i]] = pet;
             }
             UpdateIcon();
@@ -82,6 +87,10 @@ namespace TabPet
         void BuildMenu()
         {
             menu.Items.Clear();
+            var list = new ToolStripMenuItem("체크리스트");
+            list.Click += (o, e) => OpenChecklist();
+            menu.Items.Add(list);
+            menu.Items.Add(new ToolStripSeparator());
             var all = Characters.All();
             var shown = new ToolStripMenuItem(all.Count == 0 ? $"화면 캐릭터 (그림 없음: {Characters.UserDir})" : "화면에 캐릭터 띄우기")
             { Checked = settings.Shown && all.Count > 0, Enabled = all.Count > 0 };
@@ -89,7 +98,7 @@ namespace TabPet
             menu.Items.Add(shown);
 
             var sound = new ToolStripMenuItem("캐릭터 소리") { Checked = settings.Sound, Enabled = all.Count > 0 && settings.Shown };
-            sound.Click += (o, e) => { settings.Sound = !settings.Sound; settings.Save(); };
+            sound.Click += (o, e) => ToggleSound();
             menu.Items.Add(sound);
 
             if (all.Count > 1)
@@ -129,6 +138,33 @@ namespace TabPet
             menu.Items.Add(quit);
         }
 
+        void ToggleSound()
+        {
+            settings.Sound = !settings.Sound; settings.Save();
+            if (!settings.Sound) voice.Hush();
+            UpdateIcon();
+        }
+
+        // Right-click on a character: the quick way to hush it (and turn it back on).
+        ContextMenuStrip petMenu;
+        ContextMenuStrip PetMenu()
+        {
+            petMenu?.Dispose();
+            petMenu = new ContextMenuStrip();
+            var it = new ToolStripMenuItem(settings.Sound ? "소리 끄기" : "소리 켜기");
+            it.Click += (o, e) => ToggleSound();
+            petMenu.Items.Add(it);
+            return petMenu;
+        }
+
+        // From the tray menu: over the first character out on screen, else by the tray.
+        void OpenChecklist()
+        {
+            var p = settings.Characters.Where(pets.ContainsKey).Select(n => pets[n]).FirstOrDefault(x => !x.Drawn.IsEmpty);
+            if (p != null) checklist.Open(p.Drawn, p);
+            else { var c = Cursor.Position; checklist.Open(new Rectangle(c.X - 8, c.Y - 8, 16, 16), null); }
+        }
+
         static bool StartsAtLogin()
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey);
@@ -148,14 +184,17 @@ namespace TabPet
         void UpdateIcon()
         {
             var name = settings.Characters.FirstOrDefault(c => Characters.DirOf(c) != null) ?? Characters.All().FirstOrDefault();
-            if (name == iconFor && tray.Icon != null) return;
-            iconFor = name;
+            // Sound off: the icon is a little faded, nothing more on screen.
+            tray.Text = settings.Sound ? "TabPet" : "TabPet (소리 꺼짐)";
+            var key = $"{name}/{settings.Sound}";
+            if (key == iconFor && tray.Icon != null) return;
+            iconFor = key;
             var old = tray.Icon;
-            tray.Icon = FaceIcon(name) ?? SystemIcons.Application;
+            tray.Icon = FaceIcon(name, settings.Sound ? 1f : 0.45f) ?? SystemIcons.Application;
             if (old != null && old != SystemIcons.Application) old.Dispose();
         }
 
-        static Icon FaceIcon(string name)
+        static Icon FaceIcon(string name, float opacity)
         {
             try
             {
@@ -176,7 +215,9 @@ namespace TabPet
                 {
                     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                     g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                    g.DrawImage(src, new RectangleF(0, 0, 32, 32), from, GraphicsUnit.Pixel);
+                    using var fade = new System.Drawing.Imaging.ImageAttributes();
+                    fade.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = opacity });
+                    g.DrawImage(src, new Rectangle(0, 0, 32, 32), from.X, from.Y, from.Width, from.Height, GraphicsUnit.Pixel, fade);
                 }
                 IntPtr hIcon = bmp.GetHicon();
                 var icon = (Icon)Icon.FromHandle(hIcon).Clone();
@@ -189,6 +230,8 @@ namespace TabPet
         void Quit()
         {
             timer.Stop(); timer.Dispose();
+            checklist.Close();
+            checklist.Store.Flush();
             foreach (var p in pets.Values) p.Dispose();
             pets.Clear();
             tray.Visible = false;

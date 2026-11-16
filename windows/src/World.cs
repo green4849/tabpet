@@ -130,6 +130,18 @@ namespace TabPet
 
         public void Want(Kind k) => pending.Add(k);
 
+        // Sound turned off: stop what's playing now, not after the clip.
+        public void Hush()
+        {
+            pending.Clear();
+            try
+            {
+                player?.Stop();
+                if (mciOpen) { Native.mciSendString("close tabpet", null, 0, IntPtr.Zero); mciOpen = false; }
+            }
+            catch { }
+        }
+
         public void SayNow(Kind k, double now)
         {
             if (!settings.Sound) return;

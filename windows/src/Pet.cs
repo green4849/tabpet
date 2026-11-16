@@ -24,6 +24,8 @@ namespace TabPet
         // How it gets up to a tab strip far above (see Pet.StartHop), from the sheet's "climb":
         // jump, balloon, fly, steps or poof (the default).
         public string Climb { get; private set; } = "poof";
+        // The sheet's "color" ("#rrggbb"): what its checklist is drawn in.
+        public Color? Tint { get; private set; }
         static readonly HashSet<string> ClimbStyles = new HashSet<string> { "jump", "balloon", "fly", "steps", "poof" };
 
         Sprite(double w, double h) { Width = w; Height = h; }
@@ -38,6 +40,12 @@ namespace TabPet
                 int cw = root.GetProperty("cell")[0].GetInt32(), ch = root.GetProperty("cell")[1].GetInt32();
                 var dp = root.GetProperty("displayPoints");
                 var s = new Sprite(dp[0].GetDouble(), dp[1].GetDouble());
+                if (root.TryGetProperty("color", out var co) && co.ValueKind == JsonValueKind.String)
+                {
+                    var hex = co.GetString().TrimStart('#');
+                    if (hex.Length == 6 && int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out int v))
+                        s.Tint = Color.FromArgb((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
+                }
                 if (root.TryGetProperty("climb", out var cl) && cl.ValueKind == JsonValueKind.String && ClimbStyles.Contains(cl.GetString())) s.Climb = cl.GetString();
                 using var sheet = new Bitmap(Path.Combine(dir, name + "-sheet.png"));
                 int r = 0;
@@ -187,10 +195,24 @@ namespace TabPet
         Point? dragLast; bool moved;
         bool failed;                        // logged one error already
 
+        // A plain click (the checklist opens over it), right-click (a small menu), and where
+        // it is while its checklist is open.
+        public Action<Pet> Tapped;
+        public Func<ContextMenuStrip> Menu;
+        public Action<Pet, Rectangle> Moved;
+        public Rectangle Drawn { get; private set; }        // where it was last drawn, on screen
+        public Color? Accent => sprite.Tint;
+        // Held while its checklist is open: it stands still and doesn't go off to a Chrome window.
+        public bool Held;
+
         Pet(Sprite s, Settings st, Voice v, Senses se, int slot)
         {
             sprite = s; settings = st; voice = v; senses = se;
-            window.MouseDown += (o, e) => { if (e.Button == MouseButtons.Left) { dragLast = Cursor.Position; moved = false; } };
+            window.MouseDown += (o, e) =>
+            {
+                if (e.Button == MouseButtons.Left) { dragLast = Cursor.Position; moved = false; }
+                else if (e.Button == MouseButtons.Right) Menu?.Invoke()?.Show(Cursor.Position);
+            };
             window.MouseMove += (o, e) => OnDrag(e);
             window.MouseUp += (o, e) => { if (e.Button == MouseButtons.Left) OnRelease(); };
             home = Primary();
@@ -247,7 +269,7 @@ namespace TabPet
                 // put somewhere by hand: don't hop back onto the front Chrome window until another one comes to the front
                 declined = target;
             }
-            else voice.Want(Voice.Kind.Poke);
+            else { voice.Want(Voice.Kind.Poke); Tapped?.Invoke(this); }
             dragLast = null; moved = false;
         }
 
@@ -317,7 +339,7 @@ namespace TabPet
                 if (floor != null && floor.Window != IntPtr.Zero) home = Screen.FromPoint(new Point((int)Mid(), floor.Y - 1));
             }
             // Go to the frontmost Chrome window once it has been in front for a moment.
-            if (!dragging && !falling && hop == null && landing <= 0 && target != IntPtr.Zero && target != declined
+            if (!dragging && !falling && hop == null && landing <= 0 && !Held && target != IntPtr.Zero && target != declined
                 && (floor == null || floor.Window != target) && now - targetSince >= 1.0 && targetScreen != null)
             {
                 var g = floors.Where(f => f.Window == target).OrderBy(f => Dist(f, Mid())).FirstOrDefault();
@@ -439,6 +461,7 @@ namespace TabPet
                 landing -= dt;
                 want = "fall"; fixedFrame = landing > 0.15 ? 2 : 3;
             }
+            else if (Held) want = "idle";
             else if (senses.Music) want = "dance";
             else if (senses.Away) want = "sleep";
             else if (now < restUntil) want = "idle";
@@ -474,8 +497,10 @@ namespace TabPet
             // shrunk (while it pops away or back) toward its feet, the bottom middle
             int sw = Math.Max(1, (int)Math.Round(w * scale)), sh = Math.Max(1, (int)Math.Round(h * scale));
             var hb = sprite.Frame(row, frame, row == "walk" && dir < 0, sw, sh);
-            window.Draw(hb, (int)Math.Round(x + (w - sw) / 2.0), (int)Math.Round(footY) - sh + (int)Math.Round(feet * scale), sw, sh,
-                        (byte)Math.Round(255 * Math.Clamp(alpha, 0, 1)));
+            int dx = (int)Math.Round(x + (w - sw) / 2.0), dy = (int)Math.Round(footY) - sh + (int)Math.Round(feet * scale);
+            window.Draw(hb, dx, dy, sw, sh, (byte)Math.Round(255 * Math.Clamp(alpha, 0, 1)));
+            var r = new Rectangle(dx, dy, sw, sh);
+            if (r != Drawn) { Drawn = r; if (Held) Moved?.Invoke(this, r); }
         }
 
         // Jump to a floor on the same screen, landing as close to where it is as the floor allows.
