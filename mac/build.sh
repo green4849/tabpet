@@ -15,5 +15,8 @@ cp build/TabPet "$OUT/Contents/MacOS/TabPet"
 # the example character and its sounds
 mkdir -p "$OUT/Contents/Resources"
 cp -R ../characters "$OUT/Contents/Resources/characters"
+# the app icon (made by tools/app-icon/make-icon.py)
+cp AppIcon.icns "$OUT/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$OUT"   # ad-hoc signature, needed on Apple Silicon
+touch "$OUT"   # so Finder and the Dock pick up a new icon
 echo "built: $OUT"
