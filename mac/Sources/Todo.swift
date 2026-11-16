@@ -107,6 +107,23 @@ final class TodoPanel: NSPanel {
     var onCancel: () -> Void = {}
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { onCancel() }
+    // A menu bar app has no Edit menu, and ⌘A/C/V/X/Z normally go through it: without this
+    // they'd do nothing. By key position, not letter, so they work with a Korean keyboard too.
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
+        let sel: Selector?
+        switch (e.keyCode, mods) {
+        case (0, .command): sel = #selector(NSText.selectAll(_:))           // A
+        case (8, .command): sel = #selector(NSText.copy(_:))                // C
+        case (9, .command): sel = #selector(NSText.paste(_:))               // V
+        case (7, .command): sel = #selector(NSText.cut(_:))                 // X
+        case (6, .command): sel = Selector(("undo:"))                       // Z
+        case (6, [.command, .shift]): sel = Selector(("redo:"))
+        default: sel = nil
+        }
+        if let sel, let r = firstResponder, r.tryToPerform(sel, with: self) { return true }
+        return super.performKeyEquivalent(with: e)
+    }
     override func constrainFrameRect(_ r: NSRect, to screen: NSScreen?) -> NSRect { r }
 }
 
